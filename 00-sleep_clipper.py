@@ -1,5 +1,31 @@
 # 00-sleep_clipper.py
 
+### Parameters to edit ###
+
+# BIDS root
+bids_root = r"C:\Users\ianzy\Documents\Research\sleep-benchmark\Michigan_Epilepsy_Data\BIDS"
+
+# BIDS path information
+subject = "umich0020"
+session = "ieeg01"
+datatype = "ieeg"
+task = "all"
+run = "01"
+suffix = "ieeg"
+extension = ".lay"
+
+# list of vigilance states to plot, e.g. ['wake', 'N1', 'N2', 'N3', 'REM']
+states_to_plot = ['wake', 'N1', 'N2', 'N3', 'REM']
+
+# specifies event number to plot. If None, will plot a random event of that state
+event_num = None
+
+# length of time window to plot from event onset (seconds)
+window_length = 15
+
+### End of parameters ###
+
+import matplotlib.pyplot as plt
 import numpy as np
 import mne
 from datetime import datetime
@@ -24,21 +50,15 @@ def get_earliest_date(tsv_path):
     earliest_date = min(dates)
     return earliest_date
 
-# BIDS root
-bids_root = r"C:\Users\ianzy\Documents\Research\sleep-benchmark\Michigan_Epilepsy_Data\BIDS"
-
-# subject id
-subject = "umich0020"
-
 # BIDS path
 bids_path = BIDSPath(
     subject=subject,
-    session="ieeg01",
-    datatype="ieeg",
-    task="all",
-    run="01",
-    suffix="ieeg",
-    extension=".lay",
+    session=session,
+    datatype=datatype,
+    task=task,
+    run=run,
+    suffix=suffix,
+    extension=extension,
     root=bids_root
 )
 
@@ -77,15 +97,12 @@ if subject == "umich0020":
 print(f"Test date of this run: {test_date}. Test time: {test_time}. Test duration (s): {test_duration}")
 print(f"Earliest date in events.tsv: {earliest_date}")
 
-# for each vigilance state
-window_length = 15 # seconds
 # get events for this run
 run_events = [event for event in vigilance_events if ((date_to_seconds(event[0].split("T")[0]) + time_to_seconds(event[0].split("T")[1]) > (date_to_seconds(test_date) + time_to_seconds(test_time))) and (date_to_seconds(event[0].split("T")[0]) + time_to_seconds(event[0].split("T")[1]) <= (date_to_seconds(test_date) + time_to_seconds(test_time) + test_duration)))]
 # merge to numpy array
 run_events = np.array(run_events)
-#print(run_events)
 
-for vigilance_state in ['wake', 'N1', 'N2', 'N3', 'REM']:
+for vigilance_state in states_to_plot:
     raw = mne.io.read_raw_persyst(bids_path)
     # get all events of that vigilance state
     state_events = run_events[run_events[:,3] == vigilance_state]
@@ -94,11 +111,13 @@ for vigilance_state in ['wake', 'N1', 'N2', 'N3', 'REM']:
         print(f"No events found for vigilance state {vigilance_state}")
         continue
     # select random event from state_events
-    random_index = np.random.randint(len(state_events))
-    random_event = state_events[random_index]
+    event_ind = np.random.randint(len(state_events))
+    if event_num is not None:
+        event_ind = event_num-1
+    event_to_plot = state_events[event_ind]
     # get onset time of random event
-    onset = round(date_to_seconds(random_event[0].split("T")[0]) + time_to_seconds(random_event[0].split("T")[1]) - time_to_seconds(test_time))
-    print("Plotted event:", random_event, f"onset time (s): {onset}")
+    onset = round(date_to_seconds(event_to_plot[0].split("T")[0]) + time_to_seconds(event_to_plot[0].split("T")[1]) - time_to_seconds(test_time))
+    print("Plotted event:", event_to_plot, f"onset time (s): {onset}")
     # load raw data within window_length seconds of that event
     raw.crop(onset, onset + window_length)
     raw.load_data()
@@ -107,10 +126,22 @@ for vigilance_state in ['wake', 'N1', 'N2', 'N3', 'REM']:
     # apply bandstop filter between 58-62 Hz
     raw.notch_filter(60, notch_widths=4)
     # set bipolar montage
-    raw = mne.set_bipolar_reference(raw, anode=["FP1","F7","T3","T5","FP2","F8","T4","T6","FP1","F3","C3","P3","FP2","F4","C4","P4","FZ","CZ"], \
-                          cathode=["F7","T3","T5","O1","F8","T4","T6","O2","F3","C3","P3","O1","F4","C4","P4","O2","CZ","PZ"])
+    anodes = ["FP1","F7","T3","T5","FP2","F8","T4","T6","FP1","F3","C3","P3","FP2","F4","C4","P4","FZ","CZ"]
+    cathodes = ["F7","T3","T5","O1","F8","T4","T6","O2","F3","C3","P3","O1","F4","C4","P4","O2","CZ","PZ"]
+    raw = mne.set_bipolar_reference(raw, anode=anodes, cathode=cathodes)
+    # plot bipolar EEG channels + EKG channels
+    ch_names = [anode + "-" + cathode for anode, cathode in zip(anodes, cathodes)] + ["EKG1", "EKG2"]
+    # create blank channels for spacing
+    blank_ch_names = ["Blank1", "Blank2", "Blank3", "Blank4", "Blank5"]
+    raw = raw.add_reference_channels(blank_ch_names)
+    # mark as bad
+    raw.info['bads'] += blank_ch_names
+    # insert blank channels at appropriate locations
+    ch_names.insert(18, "Blank5")
+    ch_names.insert(16, "Blank4")
+    ch_names.insert(12, "Blank3")
+    ch_names.insert(8, "Blank2")
+    ch_names.insert(4, "Blank1")
+    raw.pick(ch_names)
     # plot window_length seconds of data from that event
-    raw.plot(n_channels=50, title=f"Vigilance state: {vigilance_state}, event ({random_index}/{len(state_events)}) of this state", block=True)
-
-
-
+    raw.plot(n_channels=50, title=f"Vigilance state: {vigilance_state}, event ({event_ind+1}/{len(state_events)}) of this state", duration = window_length, scalings = dict(eeg=50e-6) ,remove_dc=True, splash=False, block=True)
