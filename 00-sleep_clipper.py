@@ -15,13 +15,16 @@ suffix = "ieeg"
 extension = ".lay"
 
 # list of vigilance states to plot, e.g. ['wake', 'N1', 'N2', 'N3', 'REM']
-states_to_plot = ['wake', 'N1', 'N2', 'N3', 'REM']
+states_to_plot = ['wake']
 
 # specifies event number to plot. If None, will plot a random event of that state
 event_num = None
 
 # length of time window to plot from event onset (seconds)
 window_length = 15
+
+# length of time to plot before onset (seconds)
+pre_onset = 0
 
 ### End of parameters ###
 
@@ -119,10 +122,12 @@ for vigilance_state in states_to_plot:
     onset = round(date_to_seconds(event_to_plot[0].split("T")[0]) + time_to_seconds(event_to_plot[0].split("T")[1]) - time_to_seconds(test_time))
     print("Plotted event:", event_to_plot, f"onset time (s): {onset}")
     # load raw data within window_length seconds of that event
-    raw.crop(onset, onset + window_length)
+    raw.crop(onset - pre_onset, onset + window_length)
     raw.load_data()
     # apply high pass filter at 1 Hz
     raw.filter(1, None)
+    # apply low pass filter at 70 Hz
+    #raw.filter(None, 70)
     # apply bandstop filter between 58-62 Hz
     raw.notch_filter(60, notch_widths=4)
     # set bipolar montage
