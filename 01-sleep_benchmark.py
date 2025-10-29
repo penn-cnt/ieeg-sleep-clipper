@@ -14,8 +14,8 @@ run = "01"
 suffix = "ieeg"
 extension = ".lay"
 
-# list of staging methods to use, e.g. ['yasa']
-staging_methods = ['yasa']
+# list of staging methods to use, e.g. ['yasa', 'alphadelta']
+staging_methods = ['yasa','alphadelta']
 
 # window start for sleep staging (seconds from start of recording)
 window_start = 5*3600
@@ -101,6 +101,39 @@ def get_yasa_consensus_stages(raw):
     consensus_stage = determine_consensus_stage(predicted_c3, predicted_cz, predicted_c4)
     return consensus_stage
 
+def get_alphadelta_stages(raw):
+    # calculate alpha/delta ratio on each channel
+    threshold_ratio = 0.25  # threshold ratio to separate sleep vs wake
+    sfreq = raw.info['sfreq']
+    epoch_length = 30  # seconds
+    n_epochs = int(np.floor(raw.n_times / (sfreq * epoch_length)))
+    avg_ratios = []
+    for epoch in range(n_epochs):
+        start_sample = int(epoch * epoch_length * sfreq)
+        end_sample = int((epoch + 1) * epoch_length * sfreq)
+        # pick all scalp and iEEG channels, ignore EKG
+        epoch_data = raw.get_data(picks=mne.pick_types(raw.info, eeg=True, exclude=['EKG1','EKG2']), start=start_sample, stop=end_sample)
+        # compute power spectral density
+        psd, freqs = mne.time_frequency.psd_array_welch(epoch_data, sfreq=sfreq, fmin=0.5, fmax=12, n_fft=8192, verbose=False)
+        # compute alpha power (8-12 Hz)
+        alpha_power = np.trapezoid(psd[:,(freqs >= 8) & (freqs <= 12)], axis=1)
+        # compute delta power (0.5-4 Hz)
+        delta_power = np.trapezoid(psd[:,(freqs >= 0.5) & (freqs <= 4)], axis=1)
+        # compute alpha/delta ratio
+        ratios = np.divide(alpha_power, delta_power)
+        # average across channels
+        avg_ratio = np.nanmean(ratios)
+        avg_ratios.append(avg_ratio)
+
+    # average alpha/delta ratios across channels
+    predicted_stages = []
+    for ratio in avg_ratios:
+        if ratio < threshold_ratio:
+            predicted_stages.append('sleep')
+        else:
+            predicted_stages.append('W')
+    return predicted_stages, avg_ratios
+
 def get_percent_agreement(run_events, predicted_stages, window_start, stage_duration):
     # window_start, window_length, and stage_duration are in seconds
     # analogous to Dice coefficient, for agreement between two categorical discrete time series
@@ -122,7 +155,7 @@ def get_percent_agreement(run_events, predicted_stages, window_start, stage_dura
             if (predicted_stage_start >= relative_event_times[j] - tolerance) and (predicted_stage_start < relative_event_times[j+1] - tolerance):
                 #print(f"{predicted_stage_start} between {relative_event_times[j]} and {relative_event_times[j+1]}")
                 corresponding_manual_stage = run_events[j,3]
-                if ((isinstance(predicted_stages[i], str)) and ((predicted_stages[i].lower() == corresponding_manual_stage.lower()) or ((predicted_stages[i][0].lower() == corresponding_manual_stage[0].lower()) and (predicted_stages[i][0].lower() in ['r','w'])))):
+                if ((isinstance(predicted_stages[i], str)) and ((predicted_stages[i].lower() == corresponding_manual_stage.lower()) or ((predicted_stages[i][0].lower() == corresponding_manual_stage[0].lower()) and (predicted_stages[i][0].lower() in ['r','w'])) or (predicted_stages[i] == 'sleep' and corresponding_manual_stage[0].lower() in ['n','r']))):
                     match_count += 1
                 break
         #print(f"Predicted stage: {predicted_stages[i]}, Manual stage: {corresponding_manual_stage}")
@@ -146,7 +179,7 @@ print(repr(bids_path))
 raw = mne.io.read_raw_persyst(bids_path)
 
 for annot in raw.annotations:
-    if annot["description"] in ['W', 'N1', 'N2', 'N3', 'REM']:
+    if annot["description"] in ['W', 'N1', 'N2', 'N3', 'REM']:  
         #print(f"{annot['onset']}, {annot['duration']}, {annot['description']}")
         continue
 
@@ -217,18 +250,33 @@ start_time = time.time()
 for method in staging_methods:
     print(f"Using staging method: {method}")
     if method == 'yasa':
-        consensus_stages = get_yasa_consensus_stages(raw.copy())
-        print(f"Consensus stages: {consensus_stages}")
+        predicted_stages = get_yasa_consensus_stages(raw.copy())
+    elif method == 'alphadelta':
+        predicted_stages, avg_ad_ratios = get_alphadelta_stages(raw.copy())
+        # plot average alpha/delta ratios over time
+        plt.figure(figsize=(10, 4))
+        ad_x = np.arange(window_start, window_start + len(avg_ad_ratios)*30, 30) / 3600  # assuming 30-second epochs
+        plt.plot(ad_x, avg_ad_ratios, marker='o')
+        plt.xlabel(f'Time (hrs) (t=0 is {test_time})')
+        plt.ylabel('Average Alpha/Delta Ratio')
+        plt.title(f'Average Alpha/Delta Ratios for {subject}, session {session}, task {task}, run {run}')
+        plt.xlim(window_start/3600, (window_start+window_length)/3600)
+        plt.grid()
+        plt.show()
+    else:
+        print(f"Staging method {method} not recognized. Skipping...")
+        continue
 
+    print(f"Predicted stages: {predicted_stages}")
     # calculate overlap coefficient between consensus_stages and manual stages
     print("Calculating percent agreement between consensus stages and manual stages...")
-    percent_agreement = get_percent_agreement(run_events, consensus_stages, window_start, 30)
+    percent_agreement = get_percent_agreement(run_events, predicted_stages, window_start, 30)
     print(f"Percent agreement between consensus stages and manual stages: {percent_agreement:.2f}%")
 
     # x values for consensus stages
-    stage_x = np.arange(window_start, window_start + len(consensus_stages)*30, 30) / 3600  # assuming 30-second epochs
-    y_dict_yasa = {'N3': 0, 'N2': 1, 'N1': 2, 'R': 3, 'W': 4, np.nan: np.nan}
-    stage_y = [y_dict_yasa[stage] for stage in consensus_stages]
+    stage_x = np.arange(window_start, window_start + len(predicted_stages)*30, 30) / 3600  # assuming 30-second epochs
+    y_dict_prediction = {'N3': 0, 'N2': 1, 'N1': 2, 'R': 3, 'W': 4, 'sleep': np.nan, np.nan: np.nan}
+    stage_y = [y_dict_prediction[stage] for stage in predicted_stages]
 
     print("Plotting hypnogram for cropped data...")
     plt.figure(figsize=(10, 4))
