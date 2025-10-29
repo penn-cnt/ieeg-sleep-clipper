@@ -27,8 +27,10 @@ window_length = 1*3600
 
 import matplotlib.pyplot as plt
 import numpy as np
+import time
 import mne
 from datetime import datetime
+from datetime import timedelta
 import yasa
 from collections import Counter
 from mne_bids import (
@@ -76,6 +78,8 @@ def common_average_montage(raw, channels_to_include):
 def get_yasa_consensus_stages(raw):
     # Specify the channels to include in the analysis
     channels_to_include = ['C3', 'C4', 'CZ', 'F3', 'F4', 'F7', 'F8', 'FP1', 'FP2', 'FZ', 'O1', 'O2', 'P3', 'P4', 'T3', 'T4', 'T5', 'T6']
+    # only keep these channels
+    raw.pick(channels_to_include)
     # downsample to 100 Hz
     raw.resample(100, npad="auto")
     # bandpass filter between 0.4 to 30 Hz
@@ -96,6 +100,34 @@ def get_yasa_consensus_stages(raw):
     # Determine the consensus stage
     consensus_stage = determine_consensus_stage(predicted_c3, predicted_cz, predicted_c4)
     return consensus_stage
+
+def get_percent_agreement(run_events, predicted_stages, window_start, stage_duration):
+    # window_start, window_length, and stage_duration are in seconds
+    # analogous to Dice coefficient, for agreement between two categorical discrete time series
+    # Percent agreement = (number of stages in the prediction that match the manual stage at the corresponding time point / total number of epochs in the prediction) * 100%
+    tolerance = stage_duration / 2  # stage predictions that occur within a tolerance of a change in manual stage are assigned the new manual stage for comparison
+    # create list of time from start of window for each run event
+    event_times = np.cumsum(run_events[:,1].astype(float))
+    event_times = np.insert(event_times, 0, 0) # insert 0 as first element
+    event_times = event_times[:-1] # remove last element
+    # subtract window_start from each time so that a time of 0 corresponds to start of window
+    relative_event_times = event_times - window_start
+    #print([[time,stage] for time,stage in zip(relative_event_times, run_events[:,3])])
+    # for each consensus stage, find the closest corresponding manual stage
+    match_count = 0
+    for i in range(len(predicted_stages)):
+        corresponding_manual_stage = None
+        predicted_stage_start = i * stage_duration
+        for j in range(len(relative_event_times)-1):
+            if (predicted_stage_start >= relative_event_times[j] - tolerance) and (predicted_stage_start < relative_event_times[j+1] - tolerance):
+                #print(f"{predicted_stage_start} between {relative_event_times[j]} and {relative_event_times[j+1]}")
+                corresponding_manual_stage = run_events[j,3]
+                if ((isinstance(predicted_stages[i], str)) and ((predicted_stages[i].lower() == corresponding_manual_stage.lower()) or ((predicted_stages[i][0].lower() == corresponding_manual_stage[0].lower()) and (predicted_stages[i][0].lower() in ['r','w'])))):
+                    match_count += 1
+                break
+        #print(f"Predicted stage: {predicted_stages[i]}, Manual stage: {corresponding_manual_stage}")
+    percent_agreement = (match_count / len(predicted_stages)) * 100
+    return percent_agreement
 
 # BIDS path
 bids_path = BIDSPath(
@@ -177,11 +209,21 @@ plt.yticks([0, 1, 2, 3, 4], ['N3', 'N2', 'N1', 'REM', 'W'])
 plt.grid()
 plt.show()
 
+print(f"Running automated sleep staging methods from {window_start/3600} to {(window_start+window_length)/3600} hours...")
+
+# start timer
+start_time = time.time()
+
 for method in staging_methods:
     print(f"Using staging method: {method}")
     if method == 'yasa':
         consensus_stages = get_yasa_consensus_stages(raw.copy())
         print(f"Consensus stages: {consensus_stages}")
+
+    # calculate overlap coefficient between consensus_stages and manual stages
+    print("Calculating percent agreement between consensus stages and manual stages...")
+    percent_agreement = get_percent_agreement(run_events, consensus_stages, window_start, 30)
+    print(f"Percent agreement between consensus stages and manual stages: {percent_agreement:.2f}%")
 
     # x values for consensus stages
     stage_x = np.arange(window_start, window_start + len(consensus_stages)*30, 30) / 3600  # assuming 30-second epochs
@@ -197,8 +239,12 @@ for method in staging_methods:
     plt.title(f'Cropped hypnogram for {subject}, session {session}, task {task}, run {run}')
     plt.ylim(-0.5, 4.5)
     plt.yticks([0, 1, 2, 3, 4], ['N3', 'N2', 'N1', 'REM', 'W'])
-    plt.step(stage_x, stage_y, where='post', label=f'Staging: {method}', color='tab:orange', alpha=0.5)
+    plt.step(stage_x, stage_y, where='post', label=f'Staging: {method}, {percent_agreement:.2f}% agreement', color='tab:orange', alpha=0.5)
     plt.legend()
+
+# end timer
+end_time = time.time()
+print(f"Total processing time = {timedelta(seconds=end_time-start_time)}")
 
 plt.grid()
 plt.show()
