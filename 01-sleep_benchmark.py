@@ -14,8 +14,8 @@ run = "01"
 suffix = "ieeg"
 extension = ".lay"
 
-# list of staging methods to use, e.g. ['yasa', 'alphadelta']
-staging_methods = ['yasa','alphadelta']
+# list of staging methods to use, e.g. ['yasa', 'ad_scalp', 'ad_ieeg', 'ad_all']
+staging_methods = ['yasa','ad_scalp','ad_ieeg','ad_all']
 
 # window start for sleep staging (seconds from start of recording)
 window_start = 5*3600
@@ -101,7 +101,7 @@ def get_yasa_consensus_stages(raw):
     consensus_stage = determine_consensus_stage(predicted_c3, predicted_cz, predicted_c4)
     return consensus_stage
 
-def get_alphadelta_stages(raw):
+def get_alphadelta_stages(raw, method_name):
     # calculate alpha/delta ratio on each channel
     threshold_ratio = 0.25  # threshold ratio to separate sleep vs wake
     sfreq = raw.info['sfreq']
@@ -111,8 +111,19 @@ def get_alphadelta_stages(raw):
     for epoch in range(n_epochs):
         start_sample = int(epoch * epoch_length * sfreq)
         end_sample = int((epoch + 1) * epoch_length * sfreq)
-        # pick all scalp and iEEG channels, ignore EKG
-        epoch_data = raw.get_data(picks=mne.pick_types(raw.info, eeg=True, exclude=['EKG1','EKG2']), start=start_sample, stop=end_sample)
+        if method_name == 'ad_scalp':
+            # pick all scalp EEG channels, ignore EKG
+            epoch_data = raw.get_data(picks=mne.pick_types(raw.info, eeg=True, exclude=['EKG1','EKG2']), start=start_sample, stop=end_sample)
+        elif method_name == 'ad_ieeg':
+            # pick all iEEG channels, ignore EKG
+            epoch_data = raw.get_data(picks=mne.pick_types(raw.info, seeg=True, exclude=['EKG1','EKG2']), start=start_sample, stop=end_sample)
+        elif method_name == 'ad_all':
+            # pick all scalp EEG and iEEG channels, ignore EKG
+            epoch_data = raw.get_data(picks=mne.pick_types(raw.info, eeg=True, seeg=True, exclude=['EKG1','EKG2']), start=start_sample, stop=end_sample)
+        else:
+            print(f"Method name {method_name} not recognized for alpha/delta staging. Defaulting to scalp EEG channels.")
+            # pick all scalp EEG channels, ignore EKG
+            epoch_data = raw.get_data(picks=mne.pick_types(raw.info, eeg=True, exclude=['EKG1','EKG2']), start=start_sample, stop=end_sample)
         # compute power spectral density
         psd, freqs = mne.time_frequency.psd_array_welch(epoch_data, sfreq=sfreq, fmin=0.5, fmax=12, n_fft=8192, verbose=False)
         # compute alpha power (8-12 Hz)
@@ -251,8 +262,8 @@ for method in staging_methods:
     print(f"Using staging method: {method}")
     if method == 'yasa':
         predicted_stages = get_yasa_consensus_stages(raw.copy())
-    elif method == 'alphadelta':
-        predicted_stages, avg_ad_ratios = get_alphadelta_stages(raw.copy())
+    elif method[0:3] == 'ad_':
+        predicted_stages, avg_ad_ratios = get_alphadelta_stages(raw.copy(), method)
         # plot average alpha/delta ratios over time
         plt.figure(figsize=(10, 4))
         ad_x = np.arange(window_start, window_start + len(avg_ad_ratios)*30, 30) / 3600  # assuming 30-second epochs
