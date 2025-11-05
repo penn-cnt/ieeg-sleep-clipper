@@ -190,22 +190,25 @@ for idx, param_dict in enumerate(bids_path_list):
     with open(bids_path.fpath, 'rb') as f:
         lines = f.readlines()
         for i, line in enumerate(lines):
-            if len(line) < 25:
-                print(line, len(line.split(b"/")[-1]))
-            if b'TestDate=' in line and len(line.split(b"/")[-1]) == 2+2: # accounting for return characters
+            if line == b'BirthDate= \r\n':
+                # append dash
+                lines[i] = line.strip() + b'-' + b'\r\n'
+                edit_made = True
+                print(f"Edited BirthDate in layout file {bids_path.fpath} to avoid TypeError.")
+            elif b'TestDate=' in line and len(line.split(b"/")[-1]) == 2+2: # accounting for return characters
                 # convert to four digit year
                 testdate = line.split(b'=')[-1].strip().decode('utf-8')
                 testdate = datetime.strptime(testdate, "%m/%d/%y").strftime("%m/%d/%Y")
                 # replace line in file
                 lines[i] = b'TestDate=' + testdate.encode('utf-8') + b'\r\n'
                 edit_made = True
+                print(f"Edited TestDate in layout file {bids_path.fpath} to match four digit year format.")
                 break
 
     if edit_made:
         # write modified layout back to file
         with open(bids_path.fpath, 'wb') as f:
             f.writelines(lines)
-        print(f"Edited TestDate in layout file {bids_path.fpath} to match four digit year format.")
 
     raw = mne.io.read_raw_persyst(bids_path)
 
@@ -353,8 +356,8 @@ for idx, param_dict in enumerate(bids_path_list):
             # get position of 'Date' string in stages_matlab
             extracted_stages = sleep_seeg_summary[sleep_seeg_summary.index('Sleep stage')+1:sleep_seeg_summary.index('# of epochs')]
             extracted_epoch_counts = sleep_seeg_summary[sleep_seeg_summary.index('# of epochs')+1:]
-            print(f"Extracted stages: {extracted_stages}")
-            print(f"Extracted epoch counts: {extracted_epoch_counts}")
+            #print(f"Extracted stages: {extracted_stages}")
+            #print(f"Extracted epoch counts: {extracted_epoch_counts}")
             # construct predicted_stages by repeating each stage by its epoch count
             predicted_stages = []
             for stage, count in zip(extracted_stages, extracted_epoch_counts):
