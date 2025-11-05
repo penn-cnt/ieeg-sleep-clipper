@@ -18,7 +18,10 @@ from mne_bids import (
     make_report,
     print_dir_tree,
     read_raw_bids,
+    write_raw_bids
 )
+import matlab
+import matlab.engine
 
 def time_to_seconds(time_str):
     # converts a time string in the format HH:MM:SS to seconds
@@ -148,11 +151,12 @@ with open(os.path.join(os.path.dirname(__file__), "01-config.yaml"), 'r') as fil
     config = yaml.safe_load(file)
 
 bids_root = config['PARAMS']['bids_root']
+sleep_seeg_path = config['PARAMS']['sleep_seeg_path']
 bids_path_list = config['PARAMS']['bids_path_list']
 
 total_processing_time = 0
 
-for param_dict in bids_path_list:
+for idx, param_dict in enumerate(bids_path_list):
     # start timer
     start_time = time.time()
 
@@ -272,7 +276,7 @@ for param_dict in bids_path_list:
 
     plt.show()
 
-    print(f"Running automated sleep staging methods from {window_start/3600} to {(window_stop)/3600} hours...")
+    print(f"Running automated sleep staging methods from {window_start/3600} to {(window_stop)/3600} hours... (entry {idx+1} of {len(bids_path_list)})")
 
     for method in staging_methods:
         print(f"Using staging method: {method}")
@@ -308,6 +312,35 @@ for param_dict in bids_path_list:
                 
                 plt.savefig(os.path.join(os.path.dirname(__file__), "figures", subject, f'{subject}_{session}_{task}_{run}_{window_start}_{window_stop}_avg_ad_ratios_{method}.png'))
             plt.show()
+        elif method == 'sleep_seeg':
+            # write file as EDF format for SleepSEEG
+            print("Exporting temporary EDF file for SleepSEEG staging...")
+            edf_path = os.path.join(os.path.dirname(__file__), f'temp_{subject}_{session}_{task}_{run}.edf')
+            mne.export.export_raw(edf_path, raw.copy().pick(picks=ieeg_channel_names).resample(200, npad="auto"), fmt='edf', overwrite=True)
+            print(f"Temporary EDF file written to {edf_path} for SleepSEEG staging.")
+            # start MATLAB engine
+            eng = matlab.engine.start_matlab()
+            # add SleepSEEG folder to MATLAB path
+            eng.addpath(sleep_seeg_path)
+            # call SleepSEEG function
+            sleep_seeg_summary,sleep_seeg_stages = eng.SleepSEEG(edf_path, 0, nargout=2)
+            # convert MATLAB cell array to Python list
+            sleep_seeg_summary = [str(stage) for stage in sleep_seeg_summary]
+            #print(f"SleepSEEG predicted stages: {predicted_stages}")
+            # reshape 1D list to 2D matrix
+            # get position of 'Date' string in stages_matlab
+            extracted_stages = sleep_seeg_summary[sleep_seeg_summary.index('Sleep stage')+1:sleep_seeg_summary.index('# of epochs')]
+            extracted_epoch_counts = sleep_seeg_summary[sleep_seeg_summary.index('# of epochs')+1:]
+            print(f"Extracted stages: {extracted_stages}")
+            print(f"Extracted epoch counts: {extracted_epoch_counts}")
+            # construct predicted_stages by repeating each stage by its epoch count
+            predicted_stages = []
+            for stage, count in zip(extracted_stages, extracted_epoch_counts):
+                predicted_stages.extend([stage] * int(float(count)))
+            eng.quit()
+            # remove temporary EDF file
+            # os.remove(edf_path)
+
         else:
             print(f"Staging method {method} not recognized. Skipping...")
             continue

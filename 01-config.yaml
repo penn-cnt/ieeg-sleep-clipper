@@ -1,5 +1,19 @@
 PARAMS:
     bids_root: C:\Users\ianzy\Documents\Research\sleep-benchmark\Michigan_Epilepsy_Data\BIDS
+    sleep_seeg_path: C:\Users\ianzy\Documents\Research\sleep-benchmark\ieeg-sleep-clipper\sleep_seeg
+    ### Parameters for each BIDS path:
+    # subject: Subject ID
+    # session: Session
+    # datatype: Data type (e.g., ieeg)
+    # task: Task
+    # run: Run number
+    # suffix: Suffix for the data files
+    # extension: File extension
+    # staging_methods: List of staging methods to apply (e.g. yasa, ad_scalp, ad_ieeg, ad_all, sleep_seeg)
+    # stage_full_recording: If True, stage the full recording; if False, use window_start and window_stop
+    # window_start: Start time in seconds for staging (if stage_full_recording is False)
+    # window_stop: Stop time in seconds for staging (if stage_full_recording is False)
+    # save_figures: If True, save hypnogram figures to disk
     bids_path_list:
         - subject: umich0020
           session: ieeg01
@@ -8,14 +22,27 @@ PARAMS:
           run: "01"
           suffix: ieeg
           extension: .lay
-          staging_methods: # list of staging methods to use, e.g. ['yasa', 'ad_scalp', 'ad_ieeg', 'ad_all']
+          staging_methods:
+            - sleep_seeg
+          stage_full_recording: False
+          window_start: 18000
+          window_stop: 21600
+          save_figures: True
+        - subject: umich0020
+          session: ieeg01
+          datatype: ieeg
+          task: all
+          run: "01"
+          suffix: ieeg
+          extension: .lay
+          staging_methods:
             - yasa
             - ad_scalp
             - ad_ieeg
             - ad_all
-          stage_full_recording: False # disregards window_start and window_stop if True
-          window_start: 10800 # seconds from start of recording
-          window_stop: 14400 # seconds from start of recording
+          stage_full_recording: False
+          window_start: 10800
+          window_stop: 14400
           save_figures: True
         - subject: umich0020
           session: ieeg01
