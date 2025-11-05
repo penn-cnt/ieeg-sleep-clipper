@@ -185,6 +185,28 @@ for idx, param_dict in enumerate(bids_path_list):
 
     print(repr(bids_path))
 
+    # open layout file and edit data format to fit mne requirements
+    edit_made = False
+    with open(bids_path.fpath, 'rb') as f:
+        lines = f.readlines()
+        for i, line in enumerate(lines):
+            if len(line) < 25:
+                print(line, len(line.split(b"/")[-1]))
+            if b'TestDate=' in line and len(line.split(b"/")[-1]) == 2+2: # accounting for return characters
+                # convert to four digit year
+                testdate = line.split(b'=')[-1].strip().decode('utf-8')
+                testdate = datetime.strptime(testdate, "%m/%d/%y").strftime("%m/%d/%Y")
+                # replace line in file
+                lines[i] = b'TestDate=' + testdate.encode('utf-8') + b'\r\n'
+                edit_made = True
+                break
+
+    if edit_made:
+        # write modified layout back to file
+        with open(bids_path.fpath, 'wb') as f:
+            f.writelines(lines)
+        print(f"Edited TestDate in layout file {bids_path.fpath} to match four digit year format.")
+
     raw = mne.io.read_raw_persyst(bids_path)
 
     for annot in raw.annotations:
