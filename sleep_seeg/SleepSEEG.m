@@ -1,54 +1,56 @@
 function [Summary,SleepStage]=SleepSEEG(FileList,ExtraFiles)
 
- % [Summary,SleepStage]=SleepSEEG(FileList,ExtraFiles)
- %
- % SleepSEEG performs automatic sleep scoring of intracranial EEG files.
- % The file SleepSEEG_models.mat must be in the same folder as this file.
- % It requires a complete night of iEEG data.
- % 
- % Input (optional): File name or cell array of file names of one complete 
- % night. If excluded, the file selection will be done interactively. It is
- % possible to select one or many files, they do not need to be in any 
- % particular order. Select only files for 8-12 hours of 1 complete night. 
- % ExtraFiles: File name or cell array of file names of extra segments to
- % be scored (e.g. short naps). IF empty they can be chosen interactively.
- % As many files as desired can be selected, or no extra files.
- % 
- % The iEEG files format must be EDF or EDF+C (continuous). If the format
- % is EDF+D (discontinuous), you must use other software to convert it to
- % EDF+C (e.g., EDFbrowser). Accepted sampling rates are 200, 256, 500,
- % 512, 1000, 1024, 2000, or 2048 samples per second. Different files can
- % have different sampling rate from this set. If the sampling rate of the
- % input files is not in this list, a sampling rate conversion must be done
- % with another software. All the different files must have the same 
- % channels, with the same name and in the same order. It is assumed that 
- % the channels are the recording channels in a referential montage. 
- % SleepSEEG needs a bipolar montage and will attemt to form bipolar
- % channels, assuming that the channel names end in a number indicating the
- % contact. The user has to select from a list of channels all the ones
- % that are bipolar iEEG channels, and exclude the ones that are not.
- %
- % Output variables:
- % Summary: A cell array with the list of transitions bewtween different
- % sleep stages. First column is tha file name, second column the date,
- % thrid column the time of the beginning of the sleep stage, fourth column
- % the sleep stage, and fifth column the number of consecutive epochs that
- % this sleep stage is present.
- % SleepStage: A list of the stage for each epoch. First column the file
- % index; second column the date and time in numeric (matlab) format; third
- % column the sleep stage (1 to 5, Stages R, w, N1, N2, N3); fourth column
- % the confidence (the posterior probability of the stage with highest 
- % posterior probability, higher than 0.5 means high confidence).
- %
- % SleepSEEG v1.0
- % Nicolás von Ellenrieder - 2021-12-22
- % nicolas.vonellenrieder@mcgill.ca
+% [Summary,SleepStage]=SleepSEEG(FileList,ExtraFiles)
+%
+% SleepSEEG performs automatic sleep scoring of intracranial EEG files.
+% The file SleepSEEG_models.mat must be in the same folder as this file.
+% It requires a complete night of iEEG data.
+%
+% Input (optional): File name or cell array of file names of one complete
+% night. If excluded, the file selection will be done interactively. It is
+% possible to select one or many files, they do not need to be in any
+% particular order. Select only files for 8-12 hours of 1 complete night.
+% ExtraFiles: File name or cell array of file names of extra segments to
+% be scored (e.g. short naps). IF empty they can be chosen interactively.
+% As many files as desired can be selected, or no extra files.
+%
+% The iEEG files format must be EDF or EDF+C (continuous). If the format
+% is EDF+D (discontinuous), you must use other software to convert it to
+% EDF+C (e.g., EDFbrowser). Accepted sampling rates are 200, 256, 500,
+% 512, 1000, 1024, 2000, or 2048 samples per second. Different files can
+% have different sampling rate from this set. If the sampling rate of the
+% input files is not in this list, a sampling rate conversion must be done
+% with another software. All the different files must have the same
+% channels, with the same name and in the same order. It is assumed that
+% the channels are the recording channels in a referential montage.
+% SleepSEEG needs a bipolar montage and will attemt to form bipolar
+% channels, assuming that the channel names end in a number indicating the
+% contact. The user has to select from a list of channels all the ones
+% that are bipolar iEEG channels, and exclude the ones that are not.
+%
+% Output variables:
+% Summary: A cell array with the list of transitions bewtween different
+% sleep stages. First column is tha file name, second column the date,
+% thrid column the time of the beginning of the sleep stage, fourth column
+% the sleep stage, and fifth column the number of consecutive epochs that
+% this sleep stage is present.
+% SleepStage: A list of the stage for each epoch. First column the file
+% index; second column the date and time in numeric (matlab) format; third
+% column the sleep stage (1 to 5, Stages R, w, N1, N2, N3); fourth column
+% the confidence (the posterior probability of the stage with highest
+% posterior probability, higher than 0.5 means high confidence).
+%
+% Version changes: fixed bug when reading EDF file, replaced nanmean and
+% nanstd with 'omitnan' flags. Fixed bug from version 2.1.
+% SleepSEEG v2.2
+% Nicolás von Ellenrieder - 2025-03-21
+% nicolas.vonellenrieder@mcgill.ca
 
-% Select version: 
+% Select version:
 % BEA -blind to epileptic activity, if selected, all channels can be
 % incldued (default)
 % EEA -exccluding epileptic activity, only channels with IED rate lower
-% than 1 per minute should be included (use Janca's automatic detector  
+% than 1 per minute should be included (use Janca's automatic detector
 % doi: 10.1007/s10548-014-0379-1 to compute the IED rate).
 version='BEA';
 
@@ -201,16 +203,17 @@ for nf=1:length(file)
     keep=[];
     for ii=1:num_channels
         if keep_channels(ii)
-            keep=cat(1,keep,ones(channel_info.samples_per_record(ii),1)==1);
+            keep=cat(1,keep,ones(channel_info.samples_per_record(ii),1));
         else
-            keep=cat(1,keep,ones(channel_info.samples_per_record(ii),1)<0);
+            keep=cat(1,keep,zeros(channel_info.samples_per_record(ii),1));
         end
     end
+    keep=keep==1;
     disp(['File: ' FileName]);
     disp([num2str(Ne) ' epochs']);
     disp('Computing features...');
     % read buffer
-    buffer=ceil((sta+1.25*fs)/samp);
+    buffer=ceil((sta+1.25*fs)/samp); 
     fseek(fp,len,-1);
     X=fread(fp,sum(channel_info.samples_per_record)*buffer,'int16');
     % X=reshape(X(repmat(keep,buffer,1)),[samp num_ch buffer]);
@@ -219,16 +222,16 @@ for nf=1:length(file)
     X=X.*(mask./mask);
     X=X(~isnan(X));
     X=reshape(X,[samp num_ch buffer]);
-    
+
     X=permute(X,[1 3 2]);
     X=reshape(X,samp*buffer,num_ch);
     X=X(sta-1.25*fs+1:end,:);
     M=diag(a(keep_channels))*MM(:,keep_channels)';
-    Xb=(X-repmat(b(keep_channels),size(X,1),1))*M;
+    b=b(keep_channels)*MM(:,keep_channels)';
+    Xb=X*M-repmat(b,size(X,1),1);
     % Compute features
     for ii=1:Ne
         dur=ceil((fs*30-size(Xb,1)+2.5*fs)/samp);
-        sum(channel_info.samples_per_record)
         X=fread(fp,sum(channel_info.samples_per_record)*dur,'int16');
         % X=reshape(X(repmat(keep,dur,1)),[samp num_ch dur]);
         % edited to prevent error
@@ -239,7 +242,7 @@ for nf=1:length(file)
 
         X=permute(X,[1 3 2]);
         X=reshape(X,samp*dur,num_ch);
-        X=(X-repmat(b(keep_channels),size(X,1),1))*M;
+        X=X*M-repmat(b,size(X,1),1);
         X=cat(1,Xb,X);
         Xb=X(30*fs+1:end,:);
         X=X(1:32.5*fs,:);
@@ -284,7 +287,7 @@ for nch=1:Nch
         ff=movmean(ff,3);
         f(~in)=ff;
         % normalizing
-        if any(f), f=(f-mean(f(night),"omitnan"))./std(f(night),"omitmissing"); end
+        if any(f), f=(f-mean(f(night),'omitnan'))./std(f(night),'omitnan'); end
         feature(nch,:,nf)=f;
         % get features' coordinates
         f=feature(nch,night,nf);
@@ -326,7 +329,7 @@ for gc=1:Ng
     end
 end
 % Combine channels
-prop=squeeze(nanmean(postprob,1));
+prop=squeeze(mean(postprob,1,'omitnan'));
 prop(:,1:4)=prop(:,1:4)./repmat(sum(prop(:,1:4),2),[1 4]);
 confidence=prop;
 
@@ -360,7 +363,7 @@ for ii=size(icc,1)+1:-1:3
     if strcmp(Summary{ii,2},Summary{ii-1,2}), Summary{ii,2}=' '; end
 end
 
-% to allow for export to Python
+% edited to allow for export to Python
 Summary = Summary(:);
 SleepStage = SleepStage(:);
 
