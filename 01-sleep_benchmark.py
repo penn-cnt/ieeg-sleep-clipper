@@ -247,9 +247,10 @@ for idx, param_dict in enumerate(bids_path_list):
         delta = date - earliest_date
         return delta.days * 86400
 
-    # test year should be 2010 for certain subjects
-    if subject in ["umich0020", "umich0021"]:
+    # test year should be 2010 if earliest date year is 2010
+    if "2013" in test_date and "2010" in earliest_date:
         test_date = test_date.replace("2013", "2010")
+        print(f"Adjusted test date to match earliest date year.")
     print(f"Test date of this run: {test_date}. Test time: {test_time}. Test duration (s): {test_duration}")
     print(f"Earliest date in events.tsv: {earliest_date}")
 
@@ -407,7 +408,7 @@ for idx, param_dict in enumerate(bids_path_list):
         
         if display_plots:
             plt.show()
-            
+
     # end timer
     end_time = time.time()
     total_processing_time += end_time - start_time

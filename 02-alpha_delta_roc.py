@@ -187,9 +187,10 @@ for idx, param_dict in enumerate(bids_path_list):
         delta = date - earliest_date
         return delta.days * 86400
 
-    # test year should be 2010 for certain subjects
-    if subject in ["umich0020", "umich0021"]:
+    # test year should be 2010 if earliest date year is 2010
+    if "2013" in test_date and "2010" in earliest_date:
         test_date = test_date.replace("2013", "2010")
+        print(f"Adjusted test date to match earliest date year.")
     print(f"Test date of this run: {test_date}. Test time: {test_time}. Test duration (s): {test_duration}")
     print(f"Earliest date in events.tsv: {earliest_date}")
 
@@ -249,6 +250,12 @@ for idx, param_dict in enumerate(bids_path_list):
 
 # plot ROC curves for scalp and ieeg
 for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG']):
+    # omit None values from true_stage and ad_ratios
+    filtered_indices = [i for i in range(len(true_stage)) if true_stage[i] is not None and not math.isnan(ad_ratios[i])]
+    print(f"Omitted {len(true_stage) - len(filtered_indices)} epochs with None or NaN values.")
+    true_stage = [true_stage[i] for i in filtered_indices]
+    ad_ratios = [ad_ratios[i] for i in filtered_indices]
+
     # binarize true_stage: sleep (N1, N2, N3, REM) = 1, wake = 0
     binary_true_stage = [1 if (stage.lower() == 'wake' or stage.lower() == 'w') else 0 for stage in true_stage]
 
@@ -285,7 +292,7 @@ for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG
     plt.figure()
     plt.hist([ad_ratios[i] for i in range(len(ad_ratios)) if binary_true_stage[i] == 0], bins=30, alpha=0.5, label='Sleep', color='blue')
     plt.hist([ad_ratios[i] for i in range(len(ad_ratios)) if binary_true_stage[i] == 1], bins=30, alpha=0.5, label='Wake', color='orange')
-    plt.axvline(x=best_threshold, color='red', linestyle='--', label='Best Threshold')
+    plt.axvline(x=best_threshold, color='red', linestyle='--', label=f'Best Threshold = {best_threshold:.2f} (TPR = {tpr[best_threshold_index]:.2f}, FPR = {fpr[best_threshold_index]:.2f})')
     plt.xlabel('Average Alpha/Delta Ratio')
     plt.ylabel('Count')
     plt.title(f'Histogram of Average Alpha/Delta Ratios - {label}')
