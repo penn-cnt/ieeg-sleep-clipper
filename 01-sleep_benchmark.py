@@ -153,6 +153,7 @@ with open(os.path.join(os.path.dirname(__file__), "01-config.yaml"), 'r') as fil
 bids_root = config['PARAMS']['bids_root']
 sleep_seeg_path = config['PARAMS']['sleep_seeg_path']
 bids_path_list = config['PARAMS']['bids_path_list']
+display_plots = config['PARAMS']['display_plots']
 
 total_processing_time = 0
 
@@ -246,8 +247,8 @@ for idx, param_dict in enumerate(bids_path_list):
         delta = date - earliest_date
         return delta.days * 86400
 
-    # if subject = "umich0020", test year should be 2010
-    if subject == "umich0020":
+    # test year should be 2010 for certain subjects
+    if subject in ["umich0020", "umich0021"]:
         test_date = test_date.replace("2013", "2010")
     print(f"Test date of this run: {test_date}. Test time: {test_time}. Test duration (s): {test_duration}")
     print(f"Earliest date in events.tsv: {earliest_date}")
@@ -259,7 +260,7 @@ for idx, param_dict in enumerate(bids_path_list):
 
     if stage_full_recording:
         window_start = 0
-        window_stop = test_duration
+        window_stop = math.floor(test_duration)
         print("Staging full recording...")
     else:
         window_start = param_dict['window_start']
@@ -299,7 +300,8 @@ for idx, param_dict in enumerate(bids_path_list):
         
         plt.savefig(os.path.join(os.path.dirname(__file__), "figures", subject, f'{subject}_{session}_{task}_{run}_full_hypnogram.png'))
 
-    plt.show()
+    if display_plots:
+        plt.show()
 
     print(f"Running automated sleep staging methods from {window_start/3600} to {(window_stop)/3600} hours... (entry {idx+1} of {len(bids_path_list)})")
 
@@ -336,7 +338,10 @@ for idx, param_dict in enumerate(bids_path_list):
                     os.makedirs(os.path.join(os.path.dirname(__file__), "figures", subject), exist_ok=True)
                 
                 plt.savefig(os.path.join(os.path.dirname(__file__), "figures", subject, f'{subject}_{session}_{task}_{run}_{window_start}_{window_stop}_avg_ad_ratios_{method}.png'))
-            plt.show()
+            
+            if display_plots:
+                plt.show()
+
         elif method == 'sleep_seeg':
             # write file as EDF format for SleepSEEG
             print("Exporting temporary EDF file for SleepSEEG staging...")
@@ -399,7 +404,10 @@ for idx, param_dict in enumerate(bids_path_list):
                 os.makedirs(os.path.join(os.path.dirname(__file__), "figures", subject), exist_ok=True)
             
             plt.savefig(os.path.join(os.path.dirname(__file__), "figures", subject, f'{subject}_{session}_{task}_{run}_{window_start}_{window_stop}_hypnogram_{method}.png'))
-        plt.show()
+        
+        if display_plots:
+            plt.show()
+            
     # end timer
     end_time = time.time()
     total_processing_time += end_time - start_time

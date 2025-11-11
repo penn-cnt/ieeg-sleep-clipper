@@ -1,8 +1,6 @@
-# for 01-sleep_benchmark.py
+# for 02-alpha_delta_roc.py
 PARAMS:
     bids_root: C:\Users\ianzy\Documents\Research\sleep-benchmark\Michigan_Epilepsy_Data\BIDS
-    sleep_seeg_path: C:\Users\ianzy\Documents\Research\sleep-benchmark\ieeg-sleep-clipper\sleep_seeg
-    display_plots: False
     ### Parameters for each BIDS path:
     # subject: Subject ID
     # session: Session
@@ -11,12 +9,20 @@ PARAMS:
     # run: Run number
     # suffix: Suffix for the data files
     # extension: File extension
-    # staging_methods: List of staging methods to apply (e.g. yasa, ad_scalp, ad_ieeg, ad_all, sleep_seeg)
     # stage_full_recording: If True, stage the full recording; if False, use window_start and window_stop
     # window_start: Start time in seconds for staging (if stage_full_recording is False)
     # window_stop: Stop time in seconds for staging (if stage_full_recording is False)
-    # save_figures: If True, save hypnogram figures to disk
     bids_path_list:
+        - subject: umich0020
+          session: ieeg01
+          datatype: ieeg
+          task: all
+          run: "01"
+          suffix: ieeg
+          extension: .lay
+          stage_full_recording: False
+          window_start: 0
+          window_stop: 7200
         - subject: umich0021
           session: ieeg01
           datatype: ieeg
@@ -24,41 +30,36 @@ PARAMS:
           run: "01"
           suffix: ieeg
           extension: .lay
-          staging_methods:
-            - yasa
           stage_full_recording: False
           window_start: 0
-          window_stop: 3600
-          save_figures: True
-        - subject: umich0020
+          window_stop: 7200
+        - subject: umich0022
           session: ieeg01
           datatype: ieeg
           task: all
           run: "01"
           suffix: ieeg
           extension: .lay
-          staging_methods:
-            - yasa
-            - ad_scalp
-            - ad_ieeg
-            - ad_all
           stage_full_recording: False
-          window_start: 10800
-          window_stop: 14400
-          save_figures: True
-        - subject: umich0020
+          window_start: 0
+          window_stop: 7200
+        - subject: umich0023
           session: ieeg01
           datatype: ieeg
           task: all
           run: "01"
           suffix: ieeg
           extension: .lay
-          staging_methods:
-            - yasa
-            - ad_scalp
-            - ad_ieeg
-            - ad_all
           stage_full_recording: False
-          window_start: 18000
-          window_stop: 21600
-          save_figures: True
+          window_start: 0
+          window_stop: 7200
+        - subject: umich0024
+          session: ieeg01
+          datatype: ieeg
+          task: all
+          run: "01"
+          suffix: ieeg
+          extension: .lay
+          stage_full_recording: False
+          window_start: 0
+          window_stop: 7200
