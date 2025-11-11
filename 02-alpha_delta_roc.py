@@ -255,6 +255,7 @@ for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG
     fpr, tpr, thresholds = roc_curve(binary_true_stage, ad_ratios)
     roc_auc = auc(fpr, tpr)
 
+    plt.figure()
     plt.plot(fpr, tpr, label=f'{label} (AUC = {roc_auc:.2f})')
     plt.plot([0, 1], [0, 1], 'k--')  # diagonal line
     plt.xlim([0.0, 1.0])
@@ -278,5 +279,19 @@ for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG
         os.makedirs(os.path.join(os.path.dirname(__file__), "figures", "roc_curves"), exist_ok=True)
     plt.savefig(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", f'roc_curve_alpha_delta_{label.replace(" ", "_").lower()}_{current_time}.png'))
     print(f"Saved ROC curve for {label}.")
+    plt.close()
+
+    # plot average alpha delta ratios with best threshold line
+    plt.figure()
+    plt.hist([ad_ratios[i] for i in range(len(ad_ratios)) if binary_true_stage[i] == 0], bins=30, alpha=0.5, label='Sleep', color='blue')
+    plt.hist([ad_ratios[i] for i in range(len(ad_ratios)) if binary_true_stage[i] == 1], bins=30, alpha=0.5, label='Wake', color='orange')
+    plt.axvline(x=best_threshold, color='red', linestyle='--', label='Best Threshold')
+    plt.xlabel('Average Alpha/Delta Ratio')
+    plt.ylabel('Count')
+    plt.title(f'Histogram of Average Alpha/Delta Ratios - {label}')
+    plt.legend()
+    plt.savefig(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", f'alpha_delta_histogram_{label.replace(" ", "_").lower()}_{current_time}.png'))
+    print(f"Saved alpha/delta ratio histogram for {label}.")
+    plt.close()
 
 print(f"Total processing time = {timedelta(seconds=total_processing_time)}")
