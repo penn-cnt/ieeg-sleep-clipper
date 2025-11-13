@@ -1,4 +1,7 @@
 # 02-alpha_delta_roc.py
+# Calculate alpha/delta ratios from iEEG and scalp EEG channels and plot ROC curves/histograms
+# Uses parameters from 02-config.yaml or a specified .npz file containing precomputed ratios and true stages
+# Usage: python 02-alpha_delta_roc.py [optional argument: path to .npz file]
 
 import os
 import matplotlib.pyplot as plt
@@ -11,6 +14,7 @@ import math
 from datetime import datetime
 from datetime import timedelta
 from collections import Counter
+import sys
 from mne_bids import (
     BIDSPath,
     find_matching_paths,
@@ -99,154 +103,186 @@ ad_ratio_scalp = []
 ad_ratio_ieeg = []
 true_stage = []
 
-for idx, param_dict in enumerate(bids_path_list):
-    # start timer
-    start_time = time.time()
+if __name__ == "__main__":
+    npz_filename = sys.argv[1] if len(sys.argv) > 1 else None
 
-    subject = param_dict['subject']
-    session = param_dict['session']
-    datatype = param_dict['datatype']
-    task = param_dict['task']
-    run = param_dict['run']
-    suffix = param_dict['suffix']
-    extension = param_dict['extension']
-    stage_full_recording = param_dict['stage_full_recording']
+if npz_filename is None:
+    print("Using 02-config.yaml parameters for ROC calculation...")
+    for idx, param_dict in enumerate(bids_path_list):
+        # start timer
+        start_time = time.time()
 
-    # BIDS path
-    bids_path = BIDSPath(
-        subject=subject,
-        session=session,
-        datatype=datatype,
-        task=task,
-        run=run,
-        suffix=suffix,
-        extension=extension,
-        root=bids_root
-    )
+        subject = param_dict['subject']
+        session = param_dict['session']
+        datatype = param_dict['datatype']
+        task = param_dict['task']
+        run = param_dict['run']
+        suffix = param_dict['suffix']
+        extension = param_dict['extension']
+        stage_full_recording = param_dict['stage_full_recording']
 
-    print(repr(bids_path))
+        # BIDS path
+        bids_path = BIDSPath(
+            subject=subject,
+            session=session,
+            datatype=datatype,
+            task=task,
+            run=run,
+            suffix=suffix,
+            extension=extension,
+            root=bids_root
+        )
 
-    # open layout file and edit data format to fit mne requirements
-    edit_made = False
-    with open(bids_path.fpath, 'rb') as f:
-        lines = f.readlines()
-        for i, line in enumerate(lines):
-            if line == b'BirthDate= \r\n':
-                # append dash
-                lines[i] = line.strip() + b'-' + b'\r\n'
-                edit_made = True
-                print(f"Edited BirthDate in layout file {bids_path.fpath} to avoid TypeError.")
-            elif b'TestDate=' in line and len(line.split(b"/")[-1]) == 2+2: # accounting for return characters
-                # convert to four digit year
-                testdate = line.split(b'=')[-1].strip().decode('utf-8')
-                testdate = datetime.strptime(testdate, "%m/%d/%y").strftime("%m/%d/%Y")
-                # replace line in file
-                lines[i] = b'TestDate=' + testdate.encode('utf-8') + b'\r\n'
-                edit_made = True
-                print(f"Edited TestDate in layout file {bids_path.fpath} to match four digit year format.")
-                break
+        print(repr(bids_path))
 
-    if edit_made:
-        # write modified layout back to file
-        with open(bids_path.fpath, 'wb') as f:
-            f.writelines(lines)
+        # open layout file and edit data format to fit mne requirements
+        edit_made = False
+        with open(bids_path.fpath, 'rb') as f:
+            lines = f.readlines()
+            for i, line in enumerate(lines):
+                if line == b'BirthDate= \r\n':
+                    # append dash
+                    lines[i] = line.strip() + b'-' + b'\r\n'
+                    edit_made = True
+                    print(f"Edited BirthDate in layout file {bids_path.fpath} to avoid TypeError.")
+                elif b'TestDate=' in line and len(line.split(b"/")[-1]) == 2+2: # accounting for return characters
+                    # convert to four digit year
+                    testdate = line.split(b'=')[-1].strip().decode('utf-8')
+                    testdate = datetime.strptime(testdate, "%m/%d/%y").strftime("%m/%d/%Y")
+                    # replace line in file
+                    lines[i] = b'TestDate=' + testdate.encode('utf-8') + b'\r\n'
+                    edit_made = True
+                    print(f"Edited TestDate in layout file {bids_path.fpath} to match four digit year format.")
+                    break
 
-    raw = mne.io.read_raw_persyst(bids_path)
+        if edit_made:
+            # write modified layout back to file
+            with open(bids_path.fpath, 'wb') as f:
+                f.writelines(lines)
 
-    for annot in raw.annotations:
-        if annot["description"] in ['W', 'N1', 'N2', 'N3', 'REM']:  
-            #print(f"{annot['onset']}, {annot['duration']}, {annot['description']}")
-            continue
+        raw = mne.io.read_raw_persyst(bids_path)
 
-    # read channels.tsv for this run to determine channel types
-    channels_tsv_path = bids_path.copy().update(suffix="channels", extension=".tsv")
-    channels_data = np.loadtxt(channels_tsv_path.fpath, dtype=str, delimiter="\t", skiprows=1)
-    scalp_channel_names = channels_data[channels_data[:,1] == "EEG"][:,0].tolist()
-    ieeg_channel_names = channels_data[channels_data[:,1] == "SEEG"][:,0].tolist()
-    # convert electrode names to uppercase
-    scalp_channel_names = [name.upper() for name in scalp_channel_names]
-    ieeg_channel_names = [name.upper() for name in ieeg_channel_names]
+        for annot in raw.annotations:
+            if annot["description"] in ['W', 'N1', 'N2', 'N3', 'REM']:  
+                #print(f"{annot['onset']}, {annot['duration']}, {annot['description']}")
+                continue
 
-    # read events.tsv in the same folder
-    events_tsv_path = bids_path.copy().update(suffix="events", extension=".tsv", task=None, run=None)
+        # read channels.tsv for this run to determine channel types
+        channels_tsv_path = bids_path.copy().update(suffix="channels", extension=".tsv")
+        channels_data = np.loadtxt(channels_tsv_path.fpath, dtype=str, delimiter="\t", skiprows=1)
+        scalp_channel_names = channels_data[channels_data[:,1] == "EEG"][:,0].tolist()
+        ieeg_channel_names = channels_data[channels_data[:,1] == "SEEG"][:,0].tolist()
+        # convert electrode names to uppercase
+        scalp_channel_names = [name.upper() for name in scalp_channel_names]
+        ieeg_channel_names = [name.upper() for name in ieeg_channel_names]
 
-    # get all events where event_category = "vigilance"
-    events_data = np.loadtxt(events_tsv_path.fpath, dtype=str, delimiter="\t", skiprows=1)
-    vigilance_events = events_data[events_data[:,2] == "vigilance"]
+        # read events.tsv in the same folder
+        events_tsv_path = bids_path.copy().update(suffix="events", extension=".tsv", task=None, run=None)
 
-    # print test date of this run
-    test_date = raw.info['meas_date'].strftime('%Y-%m-%d')
-    test_time = raw.info['meas_date'].strftime('%H:%M:%S')
-    test_duration = raw.n_times / raw.info['sfreq']
-    earliest_date = get_earliest_date(events_tsv_path)
+        # get all events where event_category = "vigilance"
+        events_data = np.loadtxt(events_tsv_path.fpath, dtype=str, delimiter="\t", skiprows=1)
+        vigilance_events = events_data[events_data[:,2] == "vigilance"]
 
-    def date_to_seconds(date_str, earliest_date_str = earliest_date):
-        # converts a date string in the format YYYY-MM-DD to seconds since the earliest date
-        date = datetime.strptime(date_str, "%Y-%m-%d")
-        earliest_date = datetime.strptime(earliest_date_str, "%Y-%m-%d")
-        delta = date - earliest_date
-        return delta.days * 86400
+        # print test date of this run
+        test_date = raw.info['meas_date'].strftime('%Y-%m-%d')
+        test_time = raw.info['meas_date'].strftime('%H:%M:%S')
+        test_duration = raw.n_times / raw.info['sfreq']
+        earliest_date = get_earliest_date(events_tsv_path)
 
-    # test year should be 2010 if earliest date year is 2010
-    if "2013" in test_date and "2010" in earliest_date:
-        test_date = test_date.replace("2013", "2010")
-        print(f"Adjusted test date to match earliest date year.")
-    print(f"Test date of this run: {test_date}. Test time: {test_time}. Test duration (s): {test_duration}")
-    print(f"Earliest date in events.tsv: {earliest_date}")
+        def date_to_seconds(date_str, earliest_date_str = earliest_date):
+            # converts a date string in the format YYYY-MM-DD to seconds since the earliest date
+            date = datetime.strptime(date_str, "%Y-%m-%d")
+            earliest_date = datetime.strptime(earliest_date_str, "%Y-%m-%d")
+            delta = date - earliest_date
+            return delta.days * 86400
 
-    # get events for this run
-    run_events = [event for event in vigilance_events if ((date_to_seconds(event[0].split("T")[0]) + time_to_seconds(event[0].split("T")[1]) > (date_to_seconds(test_date) + time_to_seconds(test_time))) and (date_to_seconds(event[0].split("T")[0]) + time_to_seconds(event[0].split("T")[1]) <= (date_to_seconds(test_date) + time_to_seconds(test_time) + test_duration)))]
-    # merge to numpy array
-    run_events = np.array(run_events)
+        # test year should be 2010 if earliest date year is 2010
+        if "2013" in test_date and "2010" in earliest_date:
+            test_date = test_date.replace("2013", "2010")
+            print(f"Adjusted test date to match earliest date year.")
+        print(f"Test date of this run: {test_date}. Test time: {test_time}. Test duration (s): {test_duration}")
+        print(f"Earliest date in events.tsv: {earliest_date}")
 
-    if stage_full_recording:
-        window_start = 0
-        window_stop = math.floor(test_duration)
-        print("Staging full recording...")
-    else:
-        window_start = param_dict['window_start']
-        window_stop = param_dict['window_stop']
+        # get events for this run
+        run_events = [event for event in vigilance_events if ((date_to_seconds(event[0].split("T")[0]) + time_to_seconds(event[0].split("T")[1]) > (date_to_seconds(test_date) + time_to_seconds(test_time))) and (date_to_seconds(event[0].split("T")[0]) + time_to_seconds(event[0].split("T")[1]) <= (date_to_seconds(test_date) + time_to_seconds(test_time) + test_duration)))]
+        # merge to numpy array
+        run_events = np.array(run_events)
 
-    # crop raw data to window_length seconds from window_start
-    raw.crop(window_start, window_stop)
+        if stage_full_recording:
+            window_start = 0
+            window_stop = math.floor(test_duration)
+            print("Staging full recording...")
+        else:
+            window_start = param_dict['window_start']
+            window_stop = param_dict['window_stop']
 
-    # extract time from beginning and corresponding state from run_events
-    # convert second column to cumulative sum
-    event_times = np.cumsum(run_events[:,1].astype(float))
-    event_times = np.insert(event_times, 0, 0) # insert 0 as first element
-    event_times = event_times[:-1] # remove last element
-    event_states = run_events[:,3]
+        # crop raw data to window_length seconds from window_start
+        raw.crop(window_start, window_stop)
 
-    # map vigilance states to numerical values for plotting
-    y_dict = {'N3': 0, 'N2': 1, 'N1': 2, 'REM': 3, 'wake': 4}
-    event_y = [y_dict[state] for state in event_states]
-    # convert to hours
-    event_x = [time/3600 for time in event_times]
+        # extract time from beginning and corresponding state from run_events
+        # convert second column to cumulative sum
+        event_times = np.cumsum(run_events[:,1].astype(float))
+        event_times = np.insert(event_times, 0, 0) # insert 0 as first element
+        event_times = event_times[:-1] # remove last element
+        event_states = run_events[:,3]
 
-    print(f"Reading alpha/delta ratios and corresponding sleep/wake label from {window_start/3600} to {(window_stop)/3600} hours... (entry {idx+1} of {len(bids_path_list)})")
+        # map vigilance states to numerical values for plotting
+        y_dict = {'N3': 0, 'N2': 1, 'N1': 2, 'REM': 3, 'wake': 4}
+        event_y = [y_dict[state] for state in event_states]
+        # convert to hours
+        event_x = [time/3600 for time in event_times]
 
-    # get corresponding manual stages for this window
-    manual_stages = get_corresponding_manual_stages(run_events, window_start, window_stop - window_start, 30)
-    true_stage.extend(manual_stages)
-    print(f"Number of manual stages for this window: {len(manual_stages)}")
-    n_epochs = int(np.floor(raw.n_times / (raw.info['sfreq'] * 30)))
-    print(f"Number of 30-second epochs in this window: {n_epochs}")
-    # assert that lengths match
-    assert len(manual_stages) == n_epochs, f"Length mismatch between manual stages ({len(manual_stages)}) and number of epochs ({n_epochs})"
+        print(f"Reading alpha/delta ratios and corresponding sleep/wake label from {window_start/3600} to {(window_stop)/3600} hours... (entry {idx+1} of {len(bids_path_list)})")
 
-    for picks, label in zip([scalp_channel_names, ieeg_channel_names] , ["Scalp EEG", "iEEG"]):
-        print(f"Calculating average alpha/delta ratios for {label} channels...")
-        avg_ad_ratios = get_alphadelta_ratios(raw.copy(), picks)
+        # get corresponding manual stages for this window
+        manual_stages = get_corresponding_manual_stages(run_events, window_start, window_stop - window_start, 30)
+        true_stage.extend(manual_stages)
+        print(f"Number of manual stages for this window: {len(manual_stages)}")
+        n_epochs = int(np.floor(raw.n_times / (raw.info['sfreq'] * 30)))
+        print(f"Number of 30-second epochs in this window: {n_epochs}")
+        # assert that lengths match
+        assert len(manual_stages) == n_epochs, f"Length mismatch between manual stages ({len(manual_stages)}) and number of epochs ({n_epochs})"
 
-        if picks == scalp_channel_names:
-            ad_ratio_scalp.extend(avg_ad_ratios)
-        elif picks == ieeg_channel_names:
-            ad_ratio_ieeg.extend(avg_ad_ratios)
+        for picks, label in zip([scalp_channel_names, ieeg_channel_names] , ["Scalp EEG", "iEEG"]):
+            print(f"Calculating average alpha/delta ratios for {label} channels...")
+            avg_ad_ratios = get_alphadelta_ratios(raw.copy(), picks)
 
-    # end timer
-    end_time = time.time()
-    total_processing_time += end_time - start_time
-    print(f"Processing time = {timedelta(seconds=end_time-start_time)}")
+            if picks == scalp_channel_names:
+                ad_ratio_scalp.extend(avg_ad_ratios)
+            elif picks == ieeg_channel_names:
+                ad_ratio_ieeg.extend(avg_ad_ratios)
+
+        # end timer
+        end_time = time.time()
+        total_processing_time += end_time - start_time
+        print(f"Processing time = {timedelta(seconds=end_time-start_time)}")
+
+    # get current date and time for filename
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # create data directories if they don't exist
+    if not os.path.exists(os.path.join(os.path.dirname(__file__), "data", "ad_ratios")):
+        os.makedirs(os.path.join(os.path.dirname(__file__), "data", "ad_ratios"), exist_ok=True)
+
+    # save ad_ratio_scalp, ad_ratio_ieeg, and true_stage to combined npy file
+    np.savez(os.path.join(os.path.dirname(__file__), "data", "ad_ratios", f"{bids_path_list[0]['subject']}_run{bids_path_list[0]['run']}_to_{bids_path_list[-1]['subject']}_run{bids_path_list[-1]['run']}_ad_ratios_{current_time}.npz"),
+            ad_ratio_scalp=ad_ratio_scalp,
+            ad_ratio_ieeg=ad_ratio_ieeg,
+            true_stage=true_stage)
+else:
+    # attempt to open npz
+    try:
+        data = np.load(npz_filename, allow_pickle=True)
+        ad_ratio_scalp = data['ad_ratio_scalp'].tolist()
+        ad_ratio_ieeg = data['ad_ratio_ieeg'].tolist()
+        true_stage = data['true_stage'].tolist()
+        print(f"Loaded alpha/delta ratios and true stages from {npz_filename}.")
+    except Exception as e:
+        print(f"Error loading {npz_filename}: {e}")
+        sys.exit(1)
+    print("Using .npz file for ROC plotting instead of 02-config.yaml parameters.")
+    # get current date and time for filename
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 # plot ROC curves for scalp and ieeg
 for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG']):
@@ -272,9 +308,6 @@ for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG
     plt.title(f'ROC Curve for Average Alpha/Delta Ratio - {label}')
     plt.legend(loc="lower right")
     
-    # get current date and time for filename
-    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-
     # get best threshold
     youden_index = tpr - fpr
     best_threshold_index = np.argmax(youden_index)
@@ -284,8 +317,9 @@ for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG
     # save figure
     if not os.path.exists(os.path.join(os.path.dirname(__file__), "figures", "roc_curves")):
         os.makedirs(os.path.join(os.path.dirname(__file__), "figures", "roc_curves"), exist_ok=True)
-    plt.savefig(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", f'roc_curve_alpha_delta_{label.replace(" ", "_").lower()}_{current_time}.png'))
-    print(f"Saved ROC curve for {label}.")
+    filename = f'ad_roc_curve_{label.replace(" ", "_").lower()}_{current_time}.png'
+    plt.savefig(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", filename))
+    print(f"Saved ROC curve for {label} as {filename}.")
     plt.close()
 
     # plot average alpha delta ratios with best threshold line
@@ -297,8 +331,9 @@ for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG
     plt.ylabel('Count')
     plt.title(f'Histogram of Average Alpha/Delta Ratios - {label}')
     plt.legend()
-    plt.savefig(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", f'alpha_delta_histogram_{label.replace(" ", "_").lower()}_{current_time}.png'))
-    print(f"Saved alpha/delta ratio histogram for {label}.")
+    filename = f'ad_histogram_{label.replace(" ", "_").lower()}_{current_time}.png'
+    plt.savefig(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", filename))
+    print(f"Saved alpha/delta ratio histogram for {label} as {filename}.")
     plt.close()
 
 print(f"Total processing time = {timedelta(seconds=total_processing_time)}")
