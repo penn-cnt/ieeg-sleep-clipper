@@ -208,6 +208,11 @@ if npz_filename is None:
         # merge to numpy array
         run_events = np.array(run_events)
 
+        # if run_events is empty, skip this run
+        if run_events.shape[0] == 0:
+            print(f"No vigilance events found for this run. Skipping...")
+            continue
+
         if stage_full_recording:
             window_start = 0
             window_stop = math.floor(test_duration)
