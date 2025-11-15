@@ -59,7 +59,7 @@ def get_alphadelta_ratios(raw, picks):
         # average across channels
         avg_ratio = np.nanmean(ratios)
         avg_ratios.append(avg_ratio)
-        if (epoch + 1) % 50 == 0:
+        if (epoch + 1) % 500 == 0:
             print(f"Processed {epoch + 1}/{n_epochs} epochs")
 
     return avg_ratios
@@ -169,6 +169,10 @@ if npz_filename is None:
 
         # read channels.tsv for this run to determine channel types
         channels_tsv_path = bids_path.copy().update(suffix="channels", extension=".tsv")
+        # check if file exists before loading
+        if not os.path.exists(channels_tsv_path.fpath):
+            print(f"Channels file {channels_tsv_path.fpath} not found. Skipping this run...")
+            continue
         channels_data = np.loadtxt(channels_tsv_path.fpath, dtype=str, delimiter="\t", skiprows=1)
         scalp_channel_names = channels_data[channels_data[:,1] == "EEG"][:,0].tolist()
         ieeg_channel_names = channels_data[channels_data[:,1] == "SEEG"][:,0].tolist()
@@ -216,7 +220,7 @@ if npz_filename is None:
         if stage_full_recording:
             window_start = 0
             window_stop = math.floor(test_duration)
-            print("Staging full recording...")
+            print("Processing full recording...")
         else:
             window_start = param_dict['window_start']
             window_stop = param_dict['window_stop']
