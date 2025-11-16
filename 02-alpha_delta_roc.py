@@ -47,7 +47,12 @@ def get_alphadelta_ratios(raw, picks):
     for epoch in range(n_epochs):
         start_sample = int(epoch * epoch_length * sfreq)
         end_sample = int((epoch + 1) * epoch_length * sfreq)
-        epoch_data = raw.get_data(picks=picks, start=start_sample, stop=end_sample)
+        try:
+            epoch_data = raw.get_data(picks=picks, start=start_sample, stop=end_sample)
+        except AssertionError as e:
+            print(f"AssertionError for epoch {epoch}/{n_epochs}: {e}. Skipping this epoch.")
+            avg_ratios.append(np.nan)
+            continue
         # compute power spectral density
         psd, freqs = mne.time_frequency.psd_array_welch(epoch_data, sfreq=sfreq, fmin=0.5, fmax=12, n_fft=8192, verbose=False)
         # compute alpha power (8-12 Hz)
@@ -241,7 +246,7 @@ if npz_filename is None:
         # convert to hours
         event_x = [time/3600 for time in event_times]
 
-        print(f"Reading alpha/delta ratios and corresponding sleep/wake label from {window_start/3600} to {(window_stop)/3600} hours... (entry {idx+1} of {len(bids_path_list)})")
+        print(f"Reading alpha/delta ratios and corresponding sleep/wake label from {window_start/3600:.2f} to {(window_stop)/3600:.2f} hours... (entry {idx+1} of {len(bids_path_list)})")
 
         # get corresponding manual stages for this window
         manual_stages = get_corresponding_manual_stages(run_events, window_start, window_stop - window_start, 30)
