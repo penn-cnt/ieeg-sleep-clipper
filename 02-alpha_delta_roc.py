@@ -5,7 +5,7 @@
 
 import os
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_curve, auc
+from sklearn.metrics import roc_curve, auc, precision_recall_curve, confusion_matrix, ConfusionMatrixDisplay
 import numpy as np
 import time
 import mne
@@ -208,8 +208,8 @@ if npz_filename is None:
         # test year should be 2010 if earliest date year is 2010
         if "2013" in test_date and "2010" in earliest_date:
             test_date = test_date.replace("2013", "2010")
-            print(f"Adjusted test date to match earliest date year.")
-        print(f"Test date of this run: {test_date}. Test time: {test_time}. Test duration (s): {test_duration}")
+            print(f"Adjusted run date to match earliest date year.")
+        print(f"Run date: {test_date}. Run start time (HH:MM:SS): {test_time}. Run duration (s): {test_duration:.2f}")
         print(f"Earliest date in events.tsv: {earliest_date}")
 
         # get events for this run
@@ -298,6 +298,12 @@ else:
     # get current date and time for filename
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+# create a subdirectory in roc_curves with the current time
+if not os.path.exists(os.path.join(os.path.dirname(__file__), "figures", "roc_curves")):
+    os.makedirs(os.path.join(os.path.dirname(__file__), "figures", "roc_curves"), exist_ok=True)
+if not os.path.exists(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", current_time)):
+    os.makedirs(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", current_time), exist_ok=True)
+
 # plot ROC curves for scalp and ieeg
 for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG']):
     # omit None values from true_stage and ad_ratios
@@ -326,15 +332,48 @@ for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG
     youden_index = tpr - fpr
     best_threshold_index = np.argmax(youden_index)
     best_threshold = thresholds[best_threshold_index]
-    print(f'Best threshold for {label}: {best_threshold:.4f} (TPR = {tpr[best_threshold_index]:.2f}, FPR = {fpr[best_threshold_index]:.2f})')
+    print(f'Best ROC threshold for {label}: {best_threshold:.4f} (TPR = {tpr[best_threshold_index]:.2f}, FPR = {fpr[best_threshold_index]:.2f})')
 
     # save figure
-    if not os.path.exists(os.path.join(os.path.dirname(__file__), "figures", "roc_curves")):
-        os.makedirs(os.path.join(os.path.dirname(__file__), "figures", "roc_curves"), exist_ok=True)
     filename = f'ad_roc_curve_{label.replace(" ", "_").lower()}_{current_time}.png'
-    plt.savefig(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", filename))
+    plt.savefig(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", current_time, filename))
     print(f"Saved ROC curve for {label} as {filename}.")
     plt.close()
+
+    # precision-recall curve
+    precision, recall, pr_thresholds = precision_recall_curve(binary_true_stage, ad_ratios)
+    pr_auc = auc(recall, precision)
+
+    plt.figure()
+    plt.plot(recall, precision, label=f'{label} (AUC = {pr_auc:.2f})')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title(f'Precision-Recall Curve for Average Alpha/Delta Ratio - {label}')
+    plt.legend(loc="lower left")
+
+    # get best threshold for precision-recall curve
+    f1_scores = 2 * (precision * recall) / (precision + recall)
+    best_pr_threshold_index = np.argmax(f1_scores)
+    best_pr_threshold = pr_thresholds[best_pr_threshold_index]
+    print(f'Best PR threshold for {label}: {best_pr_threshold:.4f} (Precision = {precision[best_pr_threshold_index]:.2f}, Recall = {recall[best_pr_threshold_index]:.2f})')
+
+    # save figure
+    filename = f'ad_pr_curve_{label.replace(" ", "_").lower()}_{current_time}.png'
+    plt.savefig(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", current_time, filename))
+    print(f"Saved precision-recall curve for {label} as {filename}.")
+    plt.close()
+
+    # confusion matrix at best PR theshold
+    binary_predictions = [1 if ratio >= best_pr_threshold else 0 for ratio in ad_ratios]
+    cm = confusion_matrix(binary_true_stage, binary_predictions)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['Sleep', 'Wake'])
+    disp.plot(cmap=plt.cm.Blues)
+    plt.title(f'Confusion Matrix at Best PR Threshold - {label}')
+    filename = f'ad_confusion_{label.replace(" ", "_").lower()}_{current_time}.png'
+    plt.savefig(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", current_time, filename))
+    print(f"Saved confusion matrix for {label} as {filename}.")
 
     # plot average alpha delta ratios with best threshold line
     plt.figure()
@@ -346,7 +385,7 @@ for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG
     plt.title(f'Histogram of Average Alpha/Delta Ratios - {label}')
     plt.legend()
     filename = f'ad_histogram_{label.replace(" ", "_").lower()}_{current_time}.png'
-    plt.savefig(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", filename))
+    plt.savefig(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", current_time, filename))
     print(f"Saved alpha/delta ratio histogram for {label} as {filename}.")
     plt.close()
 
