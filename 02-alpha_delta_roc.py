@@ -330,9 +330,9 @@ for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG
     
     # get best threshold
     youden_index = tpr - fpr
-    best_threshold_index = np.argmax(youden_index)
-    best_threshold = thresholds[best_threshold_index]
-    print(f'Best ROC threshold for {label}: {best_threshold:.4f} (TPR = {tpr[best_threshold_index]:.2f}, FPR = {fpr[best_threshold_index]:.2f})')
+    best_roc_threshold_index = np.argmax(youden_index)
+    best_roc_threshold = thresholds[best_roc_threshold_index]
+    print(f'Best ROC threshold for {label}: {best_roc_threshold:.4f} (TPR = {tpr[best_roc_threshold_index]:.2f}, FPR = {fpr[best_roc_threshold_index]:.2f})')
 
     # save figure
     filename = f'ad_roc_curve_{label.replace(" ", "_").lower()}_{current_time}.png'
@@ -365,25 +365,28 @@ for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG
     print(f"Saved precision-recall curve for {label} as {filename}.")
     plt.close()
 
-    # confusion matrix at best PR theshold
-    binary_predictions = [1 if ratio >= best_pr_threshold else 0 for ratio in ad_ratios]
+    # confusion matrix at best ROC theshold
+    binary_predictions = [1 if ratio >= best_roc_threshold else 0 for ratio in ad_ratios]
     cm = confusion_matrix(binary_true_stage, binary_predictions)
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['Sleep', 'Wake'])
     disp.plot(cmap=plt.cm.Blues)
-    plt.title(f'Confusion Matrix at Best PR Threshold - {label}')
+    plt.title(f'Confusion Matrix at Best ROC Threshold - {label}')
     filename = f'ad_confusion_{label.replace(" ", "_").lower()}_{current_time}.png'
     plt.savefig(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", current_time, filename))
     print(f"Saved confusion matrix for {label} as {filename}.")
 
-    # plot average alpha delta ratios with best threshold line
+    # plot average alpha delta ratios with best threshold lines
     plt.figure()
     plt.hist([ad_ratios[i] for i in range(len(ad_ratios)) if binary_true_stage[i] == 0], bins=30, alpha=0.5, label='Sleep', color='blue')
     plt.hist([ad_ratios[i] for i in range(len(ad_ratios)) if binary_true_stage[i] == 1], bins=30, alpha=0.5, label='Wake', color='orange')
-    plt.axvline(x=best_threshold, color='red', linestyle='--', label=f'Best Threshold = {best_threshold:.2f} (TPR = {tpr[best_threshold_index]:.2f}, FPR = {fpr[best_threshold_index]:.2f})')
+    plt.axvline(x=best_roc_threshold, color='red', linestyle='--', label=f'Best ROC Threshold = {best_roc_threshold:.2f} (TPR = {tpr[best_roc_threshold_index]:.2f}, FPR = {fpr[best_roc_threshold_index]:.2f})')
+    plt.axvline(x=best_pr_threshold, color='green', linestyle='--', label=f'Best PR Threshold = {best_pr_threshold:.2f} (Precision = {precision[best_pr_threshold_index]:.2f}, Recall = {recall[best_pr_threshold_index]:.2f})')
     plt.xlabel('Average Alpha/Delta Ratio')
     plt.ylabel('Count')
     plt.title(f'Histogram of Average Alpha/Delta Ratios - {label}')
     plt.legend()
+    
+    # save figure
     filename = f'ad_histogram_{label.replace(" ", "_").lower()}_{current_time}.png'
     plt.savefig(os.path.join(os.path.dirname(__file__), "figures", "roc_curves", current_time, filename))
     print(f"Saved alpha/delta ratio histogram for {label} as {filename}.")
