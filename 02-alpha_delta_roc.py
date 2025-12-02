@@ -319,6 +319,13 @@ for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG
     # binarize true_stage: sleep (N1, N2, N3, REM) = 1, wake = 0
     binary_true_stage = [1 if (stage.lower() == 'wake' or stage.lower() == 'w') else 0 for stage in true_stage]
 
+    # normalize ad_ratios where norm_ad_ratios = ad_ratios - median(ad_ratios) / iqr(ad_ratios)
+    ad_ratios = np.array(ad_ratios)
+    median_ad = np.median(ad_ratios)
+    iqr_ad = np.percentile(ad_ratios, 75) - np.percentile(ad_ratios, 25)
+    ad_ratios = (ad_ratios - median_ad) / iqr_ad
+    print(f"Normalized alpha/delta ratios for {label} channels (median = {median_ad:.4f}, IQR = {iqr_ad:.4f}).")
+
     fpr, tpr, thresholds = roc_curve(binary_true_stage, ad_ratios)
     roc_auc = auc(fpr, tpr)
 
@@ -329,7 +336,7 @@ for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG
     plt.ylim([0.0, 1.05])
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title(f'ROC Curve for Average Alpha/Delta Ratio - {label}')
+    plt.title(f'ROC, Normalized Channel-averaged A/D Ratio - {label}')
     plt.legend(loc="lower right")
     
     # get best threshold
@@ -354,7 +361,7 @@ for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG
     plt.ylim([0.0, 1.05])
     plt.xlabel('Recall')
     plt.ylabel('Precision')
-    plt.title(f'Precision-Recall Curve for Average Alpha/Delta Ratio - {label}')
+    plt.title(f'PRC, Normalized Channel-averaged A/D Ratio - {label}')
     plt.legend(loc="lower left")
 
     # get best threshold for precision-recall curve
@@ -385,9 +392,9 @@ for ad_ratios, label in zip([ad_ratio_scalp, ad_ratio_ieeg], ['Scalp EEG', 'iEEG
     plt.hist([ad_ratios[i] for i in range(len(ad_ratios)) if binary_true_stage[i] == 1], bins=30, alpha=0.5, label='Wake', color='orange')
     plt.axvline(x=best_roc_threshold, color='red', linestyle='--', label=f'Best ROC Threshold = {best_roc_threshold:.2f} (TPR = {tpr[best_roc_threshold_index]:.2f}, FPR = {fpr[best_roc_threshold_index]:.2f})')
     plt.axvline(x=best_pr_threshold, color='green', linestyle='--', label=f'Best PR Threshold = {best_pr_threshold:.2f} (Precision = {precision[best_pr_threshold_index]:.2f}, Recall = {recall[best_pr_threshold_index]:.2f})')
-    plt.xlabel('Average Alpha/Delta Ratio')
+    plt.xlabel('Normalized Channel-averaged Alpha/Delta Ratio')
     plt.ylabel('Count')
-    plt.title(f'Histogram of Average Alpha/Delta Ratios - {label}')
+    plt.title(f'Histogram of Normalized Channel-averaged A/D Ratios - {label}')
     plt.legend()
     
     # save figure
