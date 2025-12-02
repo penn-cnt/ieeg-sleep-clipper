@@ -165,7 +165,11 @@ if npz_filename is None:
             with open(bids_path.fpath, 'wb') as f:
                 f.writelines(lines)
 
-        raw = mne.io.read_raw_persyst(bids_path)
+        try:
+            raw = mne.io.read_raw_persyst(bids_path)
+        except IndexError as e:
+            print(f"IndexError while reading {bids_path.fpath}: {e}. Skipping this run...")
+            continue
 
         for annot in raw.annotations:
             if annot["description"] in ['W', 'N1', 'N2', 'N3', 'REM']:  

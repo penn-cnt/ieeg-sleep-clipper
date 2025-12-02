@@ -7,6 +7,7 @@ import numpy as np
 import time
 import mne
 import yaml
+import math
 from datetime import datetime
 from datetime import timedelta
 import yasa
@@ -157,6 +158,9 @@ display_plots = config['PARAMS']['display_plots']
 
 total_processing_time = 0
 
+# get current date and time for filename
+current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+
 for idx, param_dict in enumerate(bids_path_list):
     # start timer
     start_time = time.time()
@@ -296,10 +300,12 @@ for idx, param_dict in enumerate(bids_path_list):
 
     if save_figures:
         # save to figures folder
-        if not os.path.exists(os.path.join(os.path.dirname(__file__), "figures", subject)):
-            os.makedirs(os.path.join(os.path.dirname(__file__), "figures", subject), exist_ok=True)
+        if not os.path.exists(os.path.join(os.path.dirname(__file__), "figures", subject, current_time)):
+            os.makedirs(os.path.join(os.path.dirname(__file__), "figures", subject, current_time), exist_ok=True)
         
-        plt.savefig(os.path.join(os.path.dirname(__file__), "figures", subject, f'{subject}_{session}_{task}_{run}_full_hypnogram.png'))
+        save_path = os.path.join(os.path.dirname(__file__), "figures", subject, current_time, f'{subject}_{session}_{task}_{run}_full_hypnogram.png')
+        plt.savefig(save_path)
+        print(f"Saved full hypnogram figure to {save_path}.")
 
     if display_plots:
         plt.show()
@@ -335,10 +341,12 @@ for idx, param_dict in enumerate(bids_path_list):
             
             if save_figures:
                 # save to figures folder
-                if not os.path.exists(os.path.join(os.path.dirname(__file__), "figures", subject)):
-                    os.makedirs(os.path.join(os.path.dirname(__file__), "figures", subject), exist_ok=True)
+                if not os.path.exists(os.path.join(os.path.dirname(__file__), "figures", subject, current_time)):
+                    os.makedirs(os.path.join(os.path.dirname(__file__), "figures", subject, current_time), exist_ok=True)
                 
-                plt.savefig(os.path.join(os.path.dirname(__file__), "figures", subject, f'{subject}_{session}_{task}_{run}_{window_start}_{window_stop}_avg_ad_ratios_{method}.png'))
+                save_path = os.path.join(os.path.dirname(__file__), "figures", subject, current_time, f'{subject}_{session}_{task}_{run}_{window_start}_{window_stop}_avg_ad_ratios_{method}.png')
+                plt.savefig(save_path)
+                print(f"Saved average alpha/delta ratio figure to {save_path}.")
             
             if display_plots:
                 plt.show()
@@ -400,11 +408,13 @@ for idx, param_dict in enumerate(bids_path_list):
         plt.grid()
         
         if save_figures:
-            # save to figures folder
-            if not os.path.exists(os.path.join(os.path.dirname(__file__), "figures", subject)):
-                os.makedirs(os.path.join(os.path.dirname(__file__), "figures", subject), exist_ok=True)
+            # create a subdirectory in figures/patient/ with the current time
+            if not os.path.exists(os.path.join(os.path.dirname(__file__), "figures", subject, current_time)):
+                os.makedirs(os.path.join(os.path.dirname(__file__), "figures", subject, current_time), exist_ok=True)
             
-            plt.savefig(os.path.join(os.path.dirname(__file__), "figures", subject, f'{subject}_{session}_{task}_{run}_{window_start}_{window_stop}_hypnogram_{method}.png'))
+            save_path = os.path.join(os.path.dirname(__file__), "figures", subject, current_time, f'{subject}_{session}_{task}_{run}_{window_start}_{window_stop}_hypnogram_{method}.png')
+            plt.savefig(save_path)
+            print(f"Saved cropped hypnogram figure to {save_path}.")
         
         if display_plots:
             plt.show()
