@@ -281,18 +281,15 @@ for idx, param_dict in enumerate(bids_path_list):
     except IndexError:
         print("No vigilance events found for this run. Skipping to next run...")
         continue
-    print(f"Run events: {run_events}")
     event_times = np.insert(event_times, 0, 0) # insert 0 as first element
     event_times = event_times[:-1] # remove last element
     event_states = run_events[:,3]
     # insert event at the end of the recording
     event_times = np.append(event_times, test_duration)
     event_states = np.append(event_states, event_states[-1])
-    print(f"Event states: {event_states}")
-    print(f"Event times (s): {event_times}")
 
     # map vigilance states to numerical values for plotting
-    y_dict = {'N3': 0, 'N2': 1, 'N1': 2, 'REM': 3, 'wake': 4}
+    y_dict = {'N3': 0, 'N2': 1, 'N1': 2, 'REM': 3, 'wake': 4, 'unknown': np.nan}
     event_y = [y_dict[state] for state in event_states]
     # convert to hours
     event_x = [time/3600 for time in event_times]
