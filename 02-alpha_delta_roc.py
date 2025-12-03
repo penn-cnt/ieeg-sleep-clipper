@@ -145,7 +145,7 @@ if npz_filename is None:
         with open(bids_path.fpath, 'rb') as f:
             lines = f.readlines()
             for i, line in enumerate(lines):
-                if line == b'BirthDate= \r\n':
+                if line == b'BirthDate= \r\n' or line == b'BirthDate=\r\n':
                     # append dash
                     lines[i] = line.strip() + b'-' + b'\r\n'
                     edit_made = True
@@ -243,6 +243,9 @@ if npz_filename is None:
         event_times = np.insert(event_times, 0, 0) # insert 0 as first element
         event_times = event_times[:-1] # remove last element
         event_states = run_events[:,3]
+        # insert event at the end of the recording
+        event_times = np.append(event_times, test_duration)
+        event_states = np.append(event_states, event_states[-1])
 
         # map vigilance states to numerical values for plotting
         y_dict = {'N3': 0, 'N2': 1, 'N1': 2, 'REM': 3, 'wake': 4}

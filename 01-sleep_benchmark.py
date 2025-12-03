@@ -195,7 +195,7 @@ for idx, param_dict in enumerate(bids_path_list):
     with open(bids_path.fpath, 'rb') as f:
         lines = f.readlines()
         for i, line in enumerate(lines):
-            if line == b'BirthDate= \r\n':
+            if line == b'BirthDate= \r\n' or line == b'BirthDate=\r\n':
                 # append dash
                 lines[i] = line.strip() + b'-' + b'\r\n'
                 edit_made = True
@@ -275,11 +275,21 @@ for idx, param_dict in enumerate(bids_path_list):
     raw.crop(window_start, window_stop)
 
     # extract time from beginning and corresponding state from run_events
-    # convert second column to cumulative sum
-    event_times = np.cumsum(run_events[:,1].astype(float))
+    # convert second column to cumulative sum 
+    try:
+        event_times = np.cumsum(run_events[:,1].astype(float))
+    except IndexError:
+        print("No vigilance events found for this run. Skipping to next run...")
+        continue
+    print(f"Run events: {run_events}")
     event_times = np.insert(event_times, 0, 0) # insert 0 as first element
     event_times = event_times[:-1] # remove last element
     event_states = run_events[:,3]
+    # insert event at the end of the recording
+    event_times = np.append(event_times, test_duration)
+    event_states = np.append(event_states, event_states[-1])
+    print(f"Event states: {event_states}")
+    print(f"Event times (s): {event_times}")
 
     # map vigilance states to numerical values for plotting
     y_dict = {'N3': 0, 'N2': 1, 'N1': 2, 'REM': 3, 'wake': 4}
