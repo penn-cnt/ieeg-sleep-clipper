@@ -6,11 +6,11 @@
 bids_root = r"C:\Users\ianzy\Documents\Research\sleep-benchmark\Michigan_Epilepsy_Data\BIDS"
 
 # BIDS path information
-subject = "umich0020"
+subject = "umich0022"
 session = "ieeg01"
 datatype = "ieeg"
 task = "all"
-run = "01"
+run = "07"
 suffix = "ieeg"
 extension = ".lay"
 
@@ -67,12 +67,36 @@ bids_path = BIDSPath(
 
 print(repr(bids_path))
 
+# open layout file and edit data format to fit mne requirements
+edit_made = False
+with open(bids_path.fpath, 'rb') as f:
+    lines = f.readlines()
+    for i, line in enumerate(lines):
+        if line == b'BirthDate= \r\n' or line == b'BirthDate=\r\n':
+            # append dash
+            lines[i] = line.strip() + b'-' + b'\r\n'
+            edit_made = True
+            print(f"Edited BirthDate in layout file {bids_path.fpath} to avoid TypeError.")
+        elif b'TestDate=' in line and len(line.split(b"/")[-1]) == 2+2: # accounting for return characters
+            # convert to four digit year
+            testdate = line.split(b'=')[-1].strip().decode('utf-8')
+            testdate = datetime.strptime(testdate, "%m/%d/%y").strftime("%m/%d/%Y")
+            # replace line in file
+            lines[i] = b'TestDate=' + testdate.encode('utf-8') + b'\r\n'
+            edit_made = True
+            print(f"Edited TestDate in layout file {bids_path.fpath} to match four digit year format.")
+            break
+
+if edit_made:
+    # write modified layout back to file
+    with open(bids_path.fpath, 'wb') as f:
+        f.writelines(lines)
+
 raw = mne.io.read_raw_persyst(bids_path)
 
 for annot in raw.annotations:
-    if annot["description"] in ['W', 'N1', 'N2', 'N3', 'REM']:
-        #print(f"{annot['onset']}, {annot['duration']}, {annot['description']}")
-        continue
+    print(f"{annot['onset']}, {annot['duration']}, {annot['description']}")
+    continue
 
 # read events.tsv in the same folder
 events_tsv_path = bids_path.copy().update(suffix="events", extension=".tsv", task=None, run=None)
@@ -105,10 +129,44 @@ run_events = [event for event in vigilance_events if ((date_to_seconds(event[0].
 # merge to numpy array
 run_events = np.array(run_events)
 
+# if run_events is empty, use comments from the lay file as run_events
+if len(run_events) == 0:
+    print("No vigilance events found in events.tsv for this run. Using comments from layout file as vigilance events.")
+    # obtain all entries under [Comments] in lay file
+    with open(bids_path.fpath, 'rb') as f:
+        lines = f.readlines()
+        comments_start = None
+        comments_end = None
+        for i, line in enumerate(lines):
+            if line.strip() == b'[Comments]':
+                comments_start = i + 1
+            elif comments_start is not None and line.startswith(b'['):
+                comments_end = i
+                break
+        if comments_start is not None:
+            if comments_end is None:
+                comments_end = len(lines)
+            comments_lines = lines[comments_start:comments_end]
+            comments_lines = [line.decode('utf-8').strip().split(",") for line in comments_lines if line.strip() != b'']
+            run_events = np.array([[line[0],line[4]] for line in comments_lines if line[4] in ['W','1','2','3','REM']])
+            print(f"Found {len(run_events)} vigilance events from comments.")
+
 for vigilance_state in states_to_plot:
     raw = mne.io.read_raw_persyst(bids_path)
-    # get all events of that vigilance state
-    state_events = run_events[run_events[:,3] == vigilance_state]
+    if run_events.shape[1] == 2:
+        # map vigilance state to corresponding code
+        state_map = {
+            'wake': 'W',
+            'N1': '1',
+            'N2': '2',
+            'N3': '3',
+            'REM': 'REM'
+        }
+        state_events = run_events[run_events[:,1] == state_map[vigilance_state]]
+    else:
+        # get all events of that vigilance state
+        state_events = run_events[run_events[:,3] == vigilance_state]
+    print(f"Found {len(state_events)} events for vigilance state {vigilance_state}:")
     print(state_events)
     if len(state_events) == 0:
         print(f"No events found for vigilance state {vigilance_state}")
@@ -119,7 +177,12 @@ for vigilance_state in states_to_plot:
         event_ind = event_num-1
     event_to_plot = state_events[event_ind]
     # get onset time of random event
-    onset = round(date_to_seconds(event_to_plot[0].split("T")[0]) + time_to_seconds(event_to_plot[0].split("T")[1]) - time_to_seconds(test_time))
+    # if the first entry contains "T"
+    if "T" not in event_to_plot[0]:
+        # assume this event came from lay file comments
+        onset = round(float(event_to_plot[0]))
+    else:
+        onset = round(date_to_seconds(event_to_plot[0].split("T")[0]) + time_to_seconds(event_to_plot[0].split("T")[1]) - time_to_seconds(test_time))
     print("Plotted event:", event_to_plot, f"onset time (s): {onset}")
     # load raw data within window_length seconds of that event
     raw.crop(onset - pre_onset, onset + window_length)

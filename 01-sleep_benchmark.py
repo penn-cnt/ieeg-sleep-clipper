@@ -120,11 +120,14 @@ def get_percent_agreement(run_events, predicted_stages, window_start, stage_dura
     # Percent agreement = (number of stages in the prediction that match the manual stage at the corresponding time point / total number of epochs in the prediction) * 100%
     tolerance = stage_duration / 2  # stage predictions that occur within a tolerance of a change in manual stage are assigned the new manual stage for comparison
     # create list of time from start of window for each run event
-    event_times = np.cumsum(run_events[:,1].astype(float))
-    event_times = np.insert(event_times, 0, 0) # insert 0 as first element
-    event_times = event_times[:-1] # remove last element
-    # subtract window_start from each time so that a time of 0 corresponds to start of window
-    relative_event_times = event_times - window_start
+    if run_events.shape[1] == 2:
+        relative_event_times = [float(event) for event in run_events[:,0]]
+    else:
+        event_times = np.cumsum(run_events[:,1].astype(float))
+        event_times = np.insert(event_times, 0, 0) # insert 0 as first element
+        event_times = event_times[:-1] # remove last element
+        # subtract window_start from each time so that a time of 0 corresponds to start of window
+        relative_event_times = event_times - window_start
     #print([[time,stage] for time,stage in zip(relative_event_times, run_events[:,3])])
     # for each consensus stage, find the closest corresponding manual stage
     match_count = 0
@@ -134,7 +137,17 @@ def get_percent_agreement(run_events, predicted_stages, window_start, stage_dura
         for j in range(len(relative_event_times)-1):
             if (predicted_stage_start >= relative_event_times[j] - tolerance) and (predicted_stage_start < relative_event_times[j+1] - tolerance):
                 #print(f"{predicted_stage_start} between {relative_event_times[j]} and {relative_event_times[j+1]}")
-                corresponding_manual_stage = run_events[j,3]
+                if run_events.shape[1] == 2:
+                    state_map = {
+                        'W': 'wake',
+                        '1': 'N1',
+                        '2': 'N2',
+                        '3': 'N3',
+                        'REM': 'REM'
+                    }
+                    corresponding_manual_stage = state_map[run_events[j,1]]
+                else:
+                    corresponding_manual_stage = run_events[j,3]
                 if ((isinstance(predicted_stages[i], str)) and ((predicted_stages[i].lower() == corresponding_manual_stage.lower()) or ((predicted_stages[i][0].lower() == corresponding_manual_stage[0].lower()) and (predicted_stages[i][0].lower() in ['r','w'])) or (predicted_stages[i] == 'sleep' and corresponding_manual_stage[0].lower() in ['n','r']))):
                     match_count += 1
                 break
@@ -262,6 +275,29 @@ for idx, param_dict in enumerate(bids_path_list):
     run_events = [event for event in vigilance_events if ((date_to_seconds(event[0].split("T")[0]) + time_to_seconds(event[0].split("T")[1]) > (date_to_seconds(test_date) + time_to_seconds(test_time))) and (date_to_seconds(event[0].split("T")[0]) + time_to_seconds(event[0].split("T")[1]) <= (date_to_seconds(test_date) + time_to_seconds(test_time) + test_duration)))]
     # merge to numpy array
     run_events = np.array(run_events)
+    print(run_events)
+
+    # if run_events is empty or only has one entry, use comments from the lay file as run_events
+    if len(run_events) <= 1:
+        print("No vigilance events found in events.tsv for this run. Using comments from layout file as vigilance events.")
+        # obtain all entries under [Comments] in lay file
+        with open(bids_path.fpath, 'rb') as f:
+            lines = f.readlines()
+            comments_start = None
+            comments_end = None
+            for i, line in enumerate(lines):
+                if line.strip() == b'[Comments]':
+                    comments_start = i + 1
+                elif comments_start is not None and line.startswith(b'['):
+                    comments_end = i
+                    break
+            if comments_start is not None:
+                if comments_end is None:
+                    comments_end = len(lines)
+                comments_lines = lines[comments_start:comments_end]
+                comments_lines = [line.decode('utf-8').strip().split(",") for line in comments_lines if line.strip() != b'']
+                run_events = np.array([[line[0],line[4]] for line in comments_lines if line[4] in ['W','1','2','3','REM']])
+                print(f"Found {len(run_events)} vigilance events from comments.")
 
     if stage_full_recording:
         window_start = 0
@@ -275,18 +311,26 @@ for idx, param_dict in enumerate(bids_path_list):
     raw.crop(window_start, window_stop)
 
     # extract time from beginning and corresponding state from run_events
-    # convert second column to cumulative sum 
-    try:
+    if run_events.shape[1] == 2:
+        # map vigilance state to corresponding code
+        state_map = {
+            'W': 'wake',
+            '1': 'N1',
+            '2': 'N2',
+            '3': 'N3',
+            'REM': 'REM'
+        }
+        event_times = [float(event) for event in run_events[:,0]]
+        event_states = [state_map[state] for state in run_events[:,1]]
+    else:
+        # convert second column to cumulative sum 
         event_times = np.cumsum(run_events[:,1].astype(float))
-    except IndexError:
-        print("No vigilance events found for this run. Skipping to next run...")
-        continue
-    event_times = np.insert(event_times, 0, 0) # insert 0 as first element
-    event_times = event_times[:-1] # remove last element
-    event_states = run_events[:,3]
-    # insert event at the end of the recording
-    event_times = np.append(event_times, test_duration)
-    event_states = np.append(event_states, event_states[-1])
+        event_times = np.insert(event_times, 0, 0) # insert 0 as first element
+        event_times = event_times[:-1] # remove last element
+        event_states = run_events[:,3]
+        # insert event at the end of the recording
+        event_times = np.append(event_times, test_duration)
+        event_states = np.append(event_states, event_states[-1])
 
     # map vigilance states to numerical values for plotting
     y_dict = {'N3': 0, 'N2': 1, 'N1': 2, 'REM': 3, 'wake': 4, 'unknown': np.nan}
@@ -333,12 +377,12 @@ for idx, param_dict in enumerate(bids_path_list):
             else:
                 print(f"Method name {method} not recognized for alpha/delta staging. Defaulting to scalp EEG channels.")
                 picks = scalp_channel_names
-            threshold_ratio = 0.25  # threshold ratio to separate sleep vs wake    
+            threshold_ratio = 0.05  # threshold ratio to separate sleep vs wake    
             predicted_stages, avg_ad_ratios = get_alphadelta_stages(raw.copy(), picks, threshold_ratio)
             # plot average alpha/delta ratios over time
             plt.figure(figsize=(10, 4))
             ad_x = np.arange(window_start, window_start + len(avg_ad_ratios)*30, 30) / 3600  # assuming 30-second epochs
-            plt.plot(ad_x, avg_ad_ratios, marker='o')
+            plt.plot(ad_x, avg_ad_ratios, marker=',')
             plt.xlabel(f'Time (hrs) (t=0 is {test_time})')
             plt.ylabel('Average Alpha/Delta Ratio')
             plt.title(f'Average alpha/delta ratios for {subject}, session {session}, task {task}, run {run} ({method})')

@@ -72,12 +72,15 @@ def get_alphadelta_ratios(raw, picks):
 def get_corresponding_manual_stages(run_events, window_start, window_length, stage_duration):
     # window_start, window_length, and stage_duration are in seconds
     tolerance = stage_duration / 2  # stage predictions that occur within a tolerance of a change in manual stage are assigned the new manual stage for comparison
-    # create list of time from start of window for each run event
-    event_times = np.cumsum(run_events[:,1].astype(float))
-    event_times = np.insert(event_times, 0, 0) # insert 0 as first element
-    event_times = event_times[:-1] # remove last element
-    # subtract window_start from each time so that a time of 0 corresponds to start of window
-    relative_event_times = event_times - window_start
+    if run_events.shape[1] == 2:
+        relative_event_times = [float(event) for event in run_events[:,0]]
+    else:
+        # create list of time from start of window for each run event
+        event_times = np.cumsum(run_events[:,1].astype(float))
+        event_times = np.insert(event_times, 0, 0) # insert 0 as first element
+        event_times = event_times[:-1] # remove last element
+        # subtract window_start from each time so that a time of 0 corresponds to start of window
+        relative_event_times = event_times - window_start
     #print([[time,stage] for time,stage in zip(relative_event_times, run_events[:,3])])
     # for each consensus stage, find the closest corresponding manual stage
     manual_stages = []
@@ -86,7 +89,17 @@ def get_corresponding_manual_stages(run_events, window_start, window_length, sta
         predicted_stage_start = i * stage_duration
         for j in range(len(relative_event_times)-1):
             if (predicted_stage_start >= relative_event_times[j] - tolerance) and (predicted_stage_start < relative_event_times[j+1] - tolerance):
-                corresponding_manual_stage = run_events[j,3]
+                if run_events.shape[1] == 2:
+                    state_map = {
+                        'W': 'wake',
+                        '1': 'N1',
+                        '2': 'N2',
+                        '3': 'N3',
+                        'REM': 'REM'
+                    }
+                    corresponding_manual_stage = state_map[run_events[j,1]]
+                else:
+                    corresponding_manual_stage = run_events[j,3]
         manual_stages.append(corresponding_manual_stage)
     return manual_stages
 
@@ -221,10 +234,46 @@ if npz_filename is None:
         # merge to numpy array
         run_events = np.array(run_events)
 
-        # if run_events is empty, skip this run
-        if run_events.shape[0] == 0:
-            print(f"No vigilance events found for this run. Skipping...")
-            continue
+        # if run_events is empty of only has one entry, use comments from the lay file as run_events
+        if run_events.shape[0] <= 1:
+            print("No vigilance events found in events.tsv for this run. Using comments from layout file as vigilance events.")
+            # obtain all entries under [Comments] in lay file
+            with open(bids_path.fpath, 'rb') as f:
+                lines = f.readlines()
+                comments_start = None
+                comments_end = None
+                for i, line in enumerate(lines):
+                    if line.strip() == b'[Comments]':
+                        comments_start = i + 1
+                    elif comments_start is not None and line.startswith(b'['):
+                        comments_end = i
+                        break
+                if comments_start is not None:
+                    if comments_end is None:
+                        comments_end = len(lines)
+                    comments_lines = lines[comments_start:comments_end]
+                    comments_lines = [line.decode('utf-8').strip().split(",") for line in comments_lines if line.strip() != b'']
+                    run_events = np.array([[line[0],line[4]] for line in comments_lines if line[4] in ['W','1','2','3','REM']])
+                    print(f"Found {len(run_events)} vigilance events from comments.")
+            event_times = [float(event) for event in run_events[:,0]]
+            state_map = {
+                'W': 'wake',
+                '1': 'N1',
+                '2': 'N2',
+                '3': 'N3',
+                'REM': 'REM'
+            }
+            event_states = [state_map[event] for event in run_events[:,1]]
+        else:
+            # extract time from beginning and corresponding state from run_events
+            # convert second column to cumulative sum
+            event_times = np.cumsum(run_events[:,1].astype(float))
+            event_times = np.insert(event_times, 0, 0) # insert 0 as first element
+            event_times = event_times[:-1] # remove last element
+            event_states = run_events[:,3]
+            # insert event at the end of the recording
+            event_times = np.append(event_times, test_duration)
+            event_states = np.append(event_states, event_states[-1])
 
         if stage_full_recording:
             window_start = 0
@@ -236,16 +285,6 @@ if npz_filename is None:
 
         # crop raw data to window_length seconds from window_start
         raw.crop(window_start, window_stop)
-
-        # extract time from beginning and corresponding state from run_events
-        # convert second column to cumulative sum
-        event_times = np.cumsum(run_events[:,1].astype(float))
-        event_times = np.insert(event_times, 0, 0) # insert 0 as first element
-        event_times = event_times[:-1] # remove last element
-        event_states = run_events[:,3]
-        # insert event at the end of the recording
-        event_times = np.append(event_times, test_duration)
-        event_states = np.append(event_states, event_states[-1])
 
         # map vigilance states to numerical values for plotting
         y_dict = {'N3': 0, 'N2': 1, 'N1': 2, 'REM': 3, 'wake': 4}
