@@ -3,19 +3,19 @@
 ### Parameters to edit ###
 
 # BIDS root
-bids_root = r"C:\Users\ianzy\Documents\Research\sleep-benchmark\Michigan_Epilepsy_Data\BIDS"
+bids_root = r"/mnt/leif/littlab/users/ianzyong/Michigan_Epilepsy_Data/BIDS/"
 
 # BIDS path information
 subject = "umich0022"
 session = "ieeg01"
 datatype = "ieeg"
 task = "all"
-run = "07"
+run = "09"
 suffix = "ieeg"
 extension = ".lay"
 
 # list of vigilance states to plot, e.g. ['wake', 'N1', 'N2', 'N3', 'REM']
-states_to_plot = ['wake']
+states_to_plot = ['wake', 'N1', 'N2', 'N3', 'REM']
 
 # specifies event number to plot. If None, will plot a random event of that state
 event_num = None
@@ -28,6 +28,9 @@ pre_onset = 0
 
 ### End of parameters ###
 
+import os
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import mne
@@ -52,6 +55,9 @@ def get_earliest_date(tsv_path):
     dates = [event[0].split("T")[0] for event in events_data]
     earliest_date = min(dates)
     return earliest_date
+
+# set either "qt" or "matplotlib" backend
+mne.viz.set_browser_backend("matplotlib")
 
 # BIDS path
 bids_path = BIDSPath(
@@ -213,3 +219,6 @@ for vigilance_state in states_to_plot:
     raw.pick(ch_names)
     # plot window_length seconds of data from that event
     raw.plot(n_channels=50, title=f"Vigilance state: {vigilance_state}, event ({event_ind+1}/{len(state_events)}) of this state", duration = window_length, scalings = dict(eeg=50e-6) ,remove_dc=True, splash=False, block=True)
+    os.makedirs(os.path.join(os.path.dirname(__file__), "figures", "clips"), exist_ok=True)
+    plt.savefig(os.path.join(os.path.dirname(__file__), "figures", "clips", f"{subject}_{run}_{vigilance_state}_interval_{event_ind}_onset_{onset}.png"))
+    print("Saved figure to clips folder.")
