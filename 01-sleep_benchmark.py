@@ -23,6 +23,8 @@ from mne_bids import (
 )
 import matlab
 import matlab.engine
+import pandas as pd
+import pickle
 
 def time_to_seconds(time_str):
     # converts a time string in the format HH:MM:SS to seconds
@@ -88,6 +90,7 @@ def get_alphadelta_stages(raw, picks, threshold_ratio):
     sfreq = raw.info['sfreq']
     epoch_length = 30  # seconds
     n_epochs = int(np.floor(raw.n_times / (sfreq * epoch_length)))
+    channel_ratios_by_epoch = []
     avg_ratios = []
     for epoch in range(n_epochs):
         start_sample = int(epoch * epoch_length * sfreq)
@@ -101,6 +104,9 @@ def get_alphadelta_stages(raw, picks, threshold_ratio):
         delta_power = np.trapezoid(psd[:,(freqs >= 0.5) & (freqs <= 4)], axis=1)
         # compute alpha/delta ratio
         ratios = np.divide(alpha_power, delta_power)
+        # store ratios and channels for this epoch
+        channel_to_ratio_dict = {channel: ratio for channel, ratio in zip(picks, ratios)}
+        channel_ratios_by_epoch.append(channel_to_ratio_dict)
         # average across channels
         avg_ratio = np.nanmean(ratios)
         avg_ratios.append(avg_ratio)
@@ -109,6 +115,18 @@ def get_alphadelta_stages(raw, picks, threshold_ratio):
     predicted_stages = []
     for ratio in avg_ratios:
         if ratio < threshold_ratio:
+            predicted_stages.append('sleep')
+        else:
+            predicted_stages.append('W')
+    return predicted_stages, avg_ratios, channel_ratios_by_epoch
+
+def channel_ratios_to_stages(channel_ratios_by_epoch, threshold_ratio):
+    predicted_stages = []
+    avg_ratios = []
+    for epoch_ratios in channel_ratios_by_epoch:
+        avg_ratio = np.nanmean(list(epoch_ratios.values()))
+        avg_ratios.append(avg_ratio)
+        if avg_ratio < threshold_ratio:
             predicted_stages.append('sleep')
         else:
             predicted_stages.append('W')
@@ -155,11 +173,12 @@ def get_percent_agreement(run_events, predicted_stages, window_start, stage_dura
     percent_agreement = (match_count / len(predicted_stages)) * 100
     return percent_agreement
 
-# config = configparser.ConfigParser()
-# config.read(os.path.join(os.path.dirname(__file__), "01-config.ini"))
-# print(config.sections())
-# bids_root = config['PARAMS']['bids_root']
-# bids_path_list = config['PARAMS']['bids_path_list']
+# threshold ratios for different alpha/delta methods
+threshold_ratios = {
+    'ad_scalp': 0.02,
+    'ad_ieeg': 0.05,
+    'ad_all': 0.04
+}
 
 with open(os.path.join(os.path.dirname(__file__), "01-config.yaml"), 'r') as file:
     config = yaml.safe_load(file)
@@ -169,10 +188,69 @@ sleep_seeg_path = config['PARAMS']['sleep_seeg_path']
 bids_path_list = config['PARAMS']['bids_path_list']
 display_plots = config['PARAMS']['display_plots']
 
+auto_mode_enabled = config['PARAMS']['auto_mode_enabled']
+auto_mode_staging_methods = config['PARAMS']['auto_mode_staging_methods']
+
+if auto_mode_enabled:
+    # construct bids_path_list automatically
+    print("Auto mode enabled. Constructing bids_path_list based on BIDS root...")
+    bids_path_list = []
+    # find all subjects in bids_root
+    subjects = get_entity_vals(bids_root, 'subject')
+    for subject in subjects:
+        sessions = get_entity_vals(os.path.join(bids_root, f'sub-{subject}'), 'session')
+        for session in sessions:
+            runs = get_entity_vals(os.path.join(bids_root, f'sub-{subject}', f'ses-{session}', 'ieeg'), 'run')
+            for run in runs:
+                param_dict = {
+                    'subject': subject,
+                    'session': session,
+                    'datatype': 'ieeg',
+                    'task': 'all',
+                    'run': run,
+                    'suffix': 'ieeg',
+                    'extension': '.lay',
+                    'staging_methods': auto_mode_staging_methods,
+                    'stage_full_recording': True,
+                    'save_figures': True
+                }
+                bids_path_list.append(param_dict)
+    print(f"Found {len(subjects)} subjects and {len(bids_path_list)} runs in total.")
+    print(f"Subjects: {subjects[0]}, {subjects[1]}... {subjects[-1]}")
+
 total_processing_time = 0
 
 # get current date and time for filename
 current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+# initialize dataframe to store results
+staging_methods_to_column_names = {
+    'yasa': 'Percent_Agreement_YASA',
+    'sleep_seeg': 'Percent_Agreement_SleepSEEG',
+    'ad_ieeg': f'Percent_Agreement_AD_Ratio_iEEG_{threshold_ratios["ad_ieeg"]}',
+    'ad_scalp': f'Percent_Agreement_AD_Ratio_scalp_{threshold_ratios["ad_scalp"]}',
+}
+
+column_names = [staging_methods_to_column_names[method] for method in auto_mode_staging_methods if method in staging_methods_to_column_names]
+results_df = pd.DataFrame(columns=['Subject', 'Run'] + column_names)
+
+# initialize rows with empty values for all patients and runs
+for param_dict in bids_path_list:
+    subject = param_dict['subject']
+    run = param_dict['run']
+    result_row = {'Subject': subject, 'Run': run}
+    for method in param_dict['staging_methods']:
+        if method in staging_methods_to_column_names:
+            result_row[staging_methods_to_column_names[method]] = np.nan
+    results_df.loc[len(results_df)] = result_row
+
+print(results_df)
+
+# output path for results csv
+os.makedirs(os.path.join(os.path.dirname(__file__), "results"), exist_ok=True)
+results_csv_path = os.path.join(os.path.dirname(__file__), "results", f'sleep_staging_benchmark_results_{current_time}.csv')
+
+last_patient = None
 
 for idx, param_dict in enumerate(bids_path_list):
     # start timer
@@ -188,6 +266,22 @@ for idx, param_dict in enumerate(bids_path_list):
     staging_methods = param_dict['staging_methods']
     stage_full_recording = param_dict['stage_full_recording']
     save_figures = param_dict['save_figures']
+
+    if subject != last_patient:
+        if last_patient is not None:
+            print(f"Calculating percent agreement across runs for patient {last_patient}...")
+            patient_results = results_df[results_df['Subject'] == last_patient]
+            # add new row for average percent agreement across runs for this patient
+            avg_row = {'Subject': last_patient, 'Run': 'Average'}
+            for method in staging_methods:
+                column_name = staging_methods_to_column_names[method]
+                avg_row[column_name] = patient_results[column_name].mean()
+            results_df.loc[len(results_df)] = avg_row
+            # overwrite results csv with new data
+            results_df.to_csv(results_csv_path, index=False)
+        print(f"Processing new patient: {subject}")
+
+    last_patient = subject
 
     # BIDS path
     bids_path = BIDSPath(
@@ -228,7 +322,11 @@ for idx, param_dict in enumerate(bids_path_list):
         with open(bids_path.fpath, 'wb') as f:
             f.writelines(lines)
 
-    raw = mne.io.read_raw_persyst(bids_path)
+    try:
+        raw = mne.io.read_raw_persyst(bids_path)
+    except Exception as e:
+        print(f"Error reading raw data from {bids_path.fpath}: {e}. Skipping this run.")
+        continue
 
     for annot in raw.annotations:
         if annot["description"] in ['W', 'N1', 'N2', 'N3', 'REM']:  
@@ -275,11 +373,10 @@ for idx, param_dict in enumerate(bids_path_list):
     run_events = [event for event in vigilance_events if ((date_to_seconds(event[0].split("T")[0]) + time_to_seconds(event[0].split("T")[1]) > (date_to_seconds(test_date) + time_to_seconds(test_time))) and (date_to_seconds(event[0].split("T")[0]) + time_to_seconds(event[0].split("T")[1]) <= (date_to_seconds(test_date) + time_to_seconds(test_time) + test_duration)))]
     # merge to numpy array
     run_events = np.array(run_events)
-    print(run_events)
 
     # if run_events is empty or only has one entry, use comments from the lay file as run_events
     if len(run_events) <= 1:
-        print("No vigilance events found in events.tsv for this run. Using comments from layout file as vigilance events.")
+        print(f"{len(run_events)} vigilance event(s) found in events.tsv for this run (<= 1). Using comments from layout file as vigilance events instead.")
         # obtain all entries under [Comments] in lay file
         with open(bids_path.fpath, 'rb') as f:
             lines = f.readlines()
@@ -370,15 +467,34 @@ for idx, param_dict in enumerate(bids_path_list):
         elif method[0:3] == 'ad_':
             if method == 'ad_scalp':
                 picks = scalp_channel_names
+                threshold_ratio = threshold_ratios[method]
             elif method == 'ad_ieeg':
                 picks = ieeg_channel_names
+                threshold_ratio = threshold_ratios[method]
             elif method == 'ad_all':
                 picks = scalp_channel_names + ieeg_channel_names
+                threshold_ratio = threshold_ratios[method]
             else:
                 print(f"Method name {method} not recognized for alpha/delta staging. Defaulting to scalp EEG channels.")
                 picks = scalp_channel_names
-            threshold_ratio = 0.05  # threshold ratio to separate sleep vs wake    
-            predicted_stages, avg_ad_ratios = get_alphadelta_stages(raw.copy(), picks, threshold_ratio)
+                threshold_ratio = threshold_ratios[method]
+            # check if alpha/delta ratios have already been computed and saved for this run
+            channel_ratios_path = os.path.join(os.path.dirname(__file__), 'data', 'ad_ratios', f'channel_ratios_{subject}_{session}_{task}_{run}_{window_start}_{window_stop}_{method}.pkl')
+            if os.path.exists(channel_ratios_path):
+                print(f"Loading precomputed channel alpha/delta ratios from {channel_ratios_path}...")
+                with open(channel_ratios_path, 'rb') as f:
+                    channel_ratios_by_epoch = pickle.load(f)
+                # get average alpha/delta ratios across channels
+                predicted_stages, avg_ad_ratios = channel_ratios_to_stages(channel_ratios_by_epoch, threshold_ratio)
+            else:
+                # compute alpha/delta ratios and stages
+                predicted_stages, avg_ad_ratios, channel_ratios_by_epoch = get_alphadelta_stages(raw.copy(), picks, threshold_ratio)
+                # save channel_ratios_by_epoch to pickle
+                os.makedirs(os.path.join(os.path.dirname(__file__), 'data', 'ad_ratios'), exist_ok=True)
+                with open(channel_ratios_path, 'wb') as f:
+                    pickle.dump(channel_ratios_by_epoch, f)
+                print(f"Saved channel alpha/delta ratios to {channel_ratios_path}.")
+
             # plot average alpha/delta ratios over time
             plt.figure(figsize=(10, 4))
             ad_x = np.arange(window_start, window_start + len(avg_ad_ratios)*30, 30) / 3600  # assuming 30-second epochs
@@ -435,10 +551,19 @@ for idx, param_dict in enumerate(bids_path_list):
             print(f"Staging method {method} not recognized. Skipping...")
             continue
 
-        print(f"Predicted stages: {predicted_stages}")
+        print(f"Predicted {predicted_stages.count('W')} wake epochs and {len(predicted_stages) - predicted_stages.count('W')} sleep epochs using method {method}.")
         # calculate overlap coefficient between predicted_stages and manual stages
         percent_agreement = get_percent_agreement(run_events, predicted_stages, window_start, 30)
         print(f"Percent agreement between predicted stages and manual stages: {percent_agreement:.2f}%")
+
+        # store result in dataframe
+        result_row = {'Subject': subject, 'Run': run}
+        if method in staging_methods_to_column_names:
+            result_row[staging_methods_to_column_names[method]] = percent_agreement
+            results_df.loc[(results_df['Subject'] == subject) & (results_df['Run'] == run), staging_methods_to_column_names[method]] = percent_agreement
+            # overwrite results csv with new data
+            results_df.to_csv(results_csv_path, index=False)
+            print(f"Saved updated results to {results_csv_path}.")
 
         # x values for predicted stages
         stage_x = np.arange(window_start, window_start + len(predicted_stages)*30, 30) / 3600  # assuming 30-second epochs
