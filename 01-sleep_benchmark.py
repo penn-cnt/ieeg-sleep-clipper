@@ -265,13 +265,16 @@ else:
         results_df.loc[len(results_df)] = result_row
 
     # add empty rows for average percent agreement across runs for each patient at the end
-    unique_subjects = set([param_dict['subject'] for param_dict in bids_path_list])
-    for subject in unique_subjects:
-        avg_row = {'Subject': subject, 'Run': 'Average'}
-        for method in auto_mode_staging_methods:
-            if method in staging_methods_to_column_names:
-                avg_row[staging_methods_to_column_names[method]] = np.nan
-        results_df.loc[len(results_df)] = avg_row
+    if auto_mode_enabled:
+        unique_subjects = set([param_dict['subject'] for param_dict in bids_path_list])
+        # sort unique_subjects
+        unique_subjects = sorted(unique_subjects)
+        for subject in unique_subjects:
+            avg_row = {'Subject': subject, 'Run': 'Average'}
+            for method in auto_mode_staging_methods:
+                if method in staging_methods_to_column_names:
+                    avg_row[staging_methods_to_column_names[method]] = np.nan
+            results_df.loc[len(results_df)] = avg_row
 
     # output path for results csv
     os.makedirs(os.path.join(os.path.dirname(__file__), "results"), exist_ok=True)
@@ -295,10 +298,10 @@ for idx, param_dict in enumerate(bids_path_list):
     save_figures = param_dict['save_figures']
 
     if subject != last_patient:
-        if last_patient is not None:
+        if ((last_patient is not None) and (auto_mode_enabled)):
             print(f"Calculating percent agreement across runs for patient {last_patient}...")
             patient_results = results_df[results_df['Subject'] == last_patient]
-            for method in auto_mode_staging_methods
+            for method in auto_mode_staging_methods:
                 if method in staging_methods_to_column_names:
                     method_column = staging_methods_to_column_names[method]
                     # exclude 'Average' row
@@ -500,7 +503,7 @@ for idx, param_dict in enumerate(bids_path_list):
             continue
         if method == 'yasa':
             # set maximum run duration for YASA staging due to memory constraints
-            run_duration_limit_for_yasa = 12 * 3600  # 12 hours in seconds
+            run_duration_limit_for_yasa = 16 * 3600 # seconds
             if (window_stop - window_start) > run_duration_limit_for_yasa:
                 print(f"Window length exceeds {run_duration_limit_for_yasa/3600} hours. Skipping due to memory constraints for YASA staging.")
                 continue
@@ -561,11 +564,17 @@ for idx, param_dict in enumerate(bids_path_list):
                 plt.show()
 
         elif method == 'sleep_seeg':
-            # write file as EDF format for SleepSEEG
-            print("Exporting temporary EDF file for SleepSEEG staging...")
-            edf_path = os.path.join(os.path.dirname(__file__), f'temp_{subject}_{session}_{task}_{run}.edf')
-            mne.export.export_raw(edf_path, raw.copy().pick(picks=ieeg_channel_names).resample(200, npad="auto"), fmt='edf', overwrite=True)
-            print(f"Temporary EDF file written to {edf_path} for SleepSEEG staging.")
+            # check if EDF file already exists for this run
+            edf_path = os.path.join(os.path.dirname(__file__), 'data', 'edf', f'{subject}_{session}_{task}_{run}_{window_start}_{window_stop}.edf')
+            if os.path.exists(edf_path):
+                print(f"Using existing EDF file at {edf_path} for SleepSEEG staging.")
+            else:
+                # write file as EDF format for SleepSEEG
+                print("Exporting EDF file for SleepSEEG staging...")
+                # create directory in data folder
+                os.makedirs(os.path.join(os.path.dirname(__file__), 'data', 'edf'), exist_ok=True)
+                mne.export.export_raw(edf_path, raw.copy().pick(picks=ieeg_channel_names).resample(200, npad="auto"), fmt='edf', overwrite=True)
+                print(f"EDF file written to {edf_path} for SleepSEEG staging.")
             # start MATLAB engine
             eng = matlab.engine.start_matlab()
             # add SleepSEEG folder to MATLAB path
