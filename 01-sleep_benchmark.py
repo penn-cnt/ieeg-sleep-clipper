@@ -1,4 +1,7 @@
 # 01-sleep_benchmark.py
+# reads 01-config.yaml for parameters
+# accepts an optional command-line argument for updating an existing results csv file
+# USAGE: python 01-sleep_benchmark.py [path/to/existing_results.csv]
 
 import os
 import configparser
@@ -25,6 +28,7 @@ import matlab
 import matlab.engine
 import pandas as pd
 import pickle
+import sys
 
 def time_to_seconds(time_str):
     # converts a time string in the format HH:MM:SS to seconds
@@ -223,39 +227,62 @@ total_processing_time = 0
 # get current date and time for filename
 current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-# initialize dataframe to store results
-staging_methods_to_column_names = {
-    'yasa': 'Percent_Agreement_YASA',
-    'sleep_seeg': 'Percent_Agreement_SleepSEEG',
-    'ad_ieeg': f'Percent_Agreement_AD_Ratio_iEEG_{threshold_ratios["ad_ieeg"]}',
-    'ad_scalp': f'Percent_Agreement_AD_Ratio_scalp_{threshold_ratios["ad_scalp"]}',
-}
+# check for results csv filename argument
+if __name__ == "__main__":
+    csv_filename = sys.argv[1] if len(sys.argv) > 1 else None
 
-column_names = [staging_methods_to_column_names[method] for method in auto_mode_staging_methods if method in staging_methods_to_column_names]
-results_df = pd.DataFrame(columns=['Subject', 'Run'] + column_names)
+if csv_filename:
+    # construct dataframe from existing csv
+    print(f"Loading existing results from {csv_filename}...")
+    try:
+        results_df = pd.read_csv(csv_filename)
+    except Exception as e:
+        print(f"Error loading CSV file {csv_filename}: {e}.")
+        sys.exit(1)
+    print(f"Saving results to existing CSV file: {csv_filename}")
+    results_csv_path = csv_filename
 
-# initialize rows with empty values for all patients and runs
-for param_dict in bids_path_list:
-    subject = param_dict['subject']
-    run = param_dict['run']
-    result_row = {'Subject': subject, 'Run': run}
-    for method in param_dict['staging_methods']:
-        if method in staging_methods_to_column_names:
-            result_row[staging_methods_to_column_names[method]] = np.nan
-    results_df.loc[len(results_df)] = result_row
+else:
+    # initialize dataframe to store results
+    staging_methods_to_column_names = {
+        'yasa': 'Percent_Agreement_YASA',
+        'sleep_seeg': 'Percent_Agreement_SleepSEEG',
+        'ad_ieeg': f'Percent_Agreement_AD_Ratio_iEEG_{threshold_ratios["ad_ieeg"]}',
+        'ad_scalp': f'Percent_Agreement_AD_Ratio_scalp_{threshold_ratios["ad_scalp"]}',
+    }
 
-print(results_df)
+    column_names = [staging_methods_to_column_names[method] for method in auto_mode_staging_methods if method in staging_methods_to_column_names]
+    results_df = pd.DataFrame(columns=['Subject', 'Run'] + column_names)
 
-# output path for results csv
-os.makedirs(os.path.join(os.path.dirname(__file__), "results"), exist_ok=True)
-results_csv_path = os.path.join(os.path.dirname(__file__), "results", f'sleep_staging_benchmark_results_{current_time}.csv')
+    # initialize rows with empty values for all patients and runs
+    for param_dict in bids_path_list:
+        subject = param_dict['subject']
+        run = param_dict['run']
+        result_row = {'Subject': subject, 'Run': run}
+        for method in param_dict['staging_methods']:
+            if method in staging_methods_to_column_names:
+                result_row[staging_methods_to_column_names[method]] = np.nan
+        results_df.loc[len(results_df)] = result_row
+
+    # add empty rows for average percent agreement across runs for each patient at the end
+    unique_subjects = set([param_dict['subject'] for param_dict in bids_path_list])
+    for subject in unique_subjects:
+        avg_row = {'Subject': subject, 'Run': 'Average'}
+        for method in auto_mode_staging_methods:
+            if method in staging_methods_to_column_names:
+                avg_row[staging_methods_to_column_names[method]] = np.nan
+        results_df.loc[len(results_df)] = avg_row
+
+    # output path for results csv
+    os.makedirs(os.path.join(os.path.dirname(__file__), "results"), exist_ok=True)
+    results_csv_path = os.path.join(os.path.dirname(__file__), "results", f'sleep_staging_benchmark_results_{current_time}.csv')
+    print(f"Saving results to new CSV file: {results_csv_path}")
+
+print(f"Initial dataframe:\n{results_df}")
 
 last_patient = None
 
 for idx, param_dict in enumerate(bids_path_list):
-    # start timer
-    start_time = time.time()
-
     subject = param_dict['subject']
     session = param_dict['session']
     datatype = param_dict['datatype']
@@ -271,12 +298,14 @@ for idx, param_dict in enumerate(bids_path_list):
         if last_patient is not None:
             print(f"Calculating percent agreement across runs for patient {last_patient}...")
             patient_results = results_df[results_df['Subject'] == last_patient]
-            # add new row for average percent agreement across runs for this patient
-            avg_row = {'Subject': last_patient, 'Run': 'Average'}
-            for method in staging_methods:
-                column_name = staging_methods_to_column_names[method]
-                avg_row[column_name] = patient_results[column_name].mean()
-            results_df.loc[len(results_df)] = avg_row
+            for method in auto_mode_staging_methods
+                if method in staging_methods_to_column_names:
+                    method_column = staging_methods_to_column_names[method]
+                    # exclude 'Average' row
+                    valid_runs = patient_results[patient_results['Run'] != 'Average']
+                    avg_percent_agreement = valid_runs[method_column].mean()
+                    results_df.loc[(results_df['Subject'] == last_patient) & (results_df['Run'] == 'Average'), method_column] = avg_percent_agreement
+                    print(f"Average percent agreement for method {method} for patient {last_patient}: {avg_percent_agreement:.2f}%")
             # overwrite results csv with new data
             results_df.to_csv(results_csv_path, index=False)
         print(f"Processing new patient: {subject}")
@@ -321,6 +350,9 @@ for idx, param_dict in enumerate(bids_path_list):
         # write modified layout back to file
         with open(bids_path.fpath, 'wb') as f:
             f.writelines(lines)
+
+    # start timer
+    start_time = time.time()
 
     try:
         raw = mne.io.read_raw_persyst(bids_path)
@@ -462,8 +494,18 @@ for idx, param_dict in enumerate(bids_path_list):
 
     for method in staging_methods:
         print(f"Using staging method: {method}")
+        # check if result already exists in the dataframe for this subject, run, and staging method
+        if not pd.isna(results_df.loc[(results_df['Subject'] == subject) & (results_df['Run'] == run), staging_methods_to_column_names[method]].values[0]):
+            print(f"Result for subject {subject}, run {run}, method {method} already exists in results dataframe. Skipping this method.")
+            continue
         if method == 'yasa':
-            predicted_stages = get_yasa_consensus_stages(raw.copy())
+            # set maximum run duration for YASA staging due to memory constraints
+            run_duration_limit_for_yasa = 12 * 3600  # 12 hours in seconds
+            if (window_stop - window_start) > run_duration_limit_for_yasa:
+                print(f"Window length exceeds {run_duration_limit_for_yasa/3600} hours. Skipping due to memory constraints for YASA staging.")
+                continue
+            else:
+                predicted_stages = get_yasa_consensus_stages(raw.copy())
         elif method[0:3] == 'ad_':
             if method == 'ad_scalp':
                 picks = scalp_channel_names
