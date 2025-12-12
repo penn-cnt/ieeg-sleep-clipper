@@ -66,28 +66,37 @@ def common_average_montage(raw, channels_to_include):
 def get_yasa_consensus_stages(raw):
     # Specify the channels to include in the analysis
     channels_to_include = ['C3', 'C4', 'CZ', 'F3', 'F4', 'F7', 'F8', 'FP1', 'FP2', 'FZ', 'O1', 'O2', 'P3', 'P4', 'T3', 'T4', 'T5', 'T6']
-    # only keep these channels
-    raw.pick(channels_to_include)
-    # downsample to 100 Hz
-    raw.resample(100, npad="auto")
-    # bandpass filter between 0.4 to 30 Hz
-    raw.filter(0.4, 30, fir_design="firwin")
-    # apply common average reference montage
-    raw = common_average_montage(raw, channels_to_include)
+    raw_duration = raw.n_times // raw.info['sfreq']
+    all_consensus_stages = []
+    # break raw into 1 hour epochs
+    for k in range(0, raw_duration, 3600):
+        start_sec = k
+        end_sec = min(k + 3600, raw_duration)
+        raw_epoch = raw.copy().crop(tmin=start_sec, tmax=end_sec)
+        # only keep these channels
+        raw_epoch.pick(channels_to_include)
+        # downsample to 100 Hz
+        raw_epoch.resample(100, npad="auto")
+        # bandpass filter between 0.4 to 30 Hz
+        raw_epoch.filter(0.4, 30, fir_design="firwin")
+        # apply common average reference montage
+        raw_epoch = common_average_montage(raw_epoch, channels_to_include)
 
-    # Sleep staging for C3, Cz, and C4
-    sls_c3 = yasa.SleepStaging(raw, eeg_name="C3")
-    predicted_c3 = sls_c3.predict()
+        # Sleep staging for C3, Cz, and C4
+        sls_c3 = yasa.SleepStaging(raw_epoch, eeg_name="C3")
+        predicted_c3 = sls_c3.predict()
 
-    sls_cz = yasa.SleepStaging(raw, eeg_name="CZ")
-    predicted_cz = sls_cz.predict()
+        sls_cz = yasa.SleepStaging(raw_epoch, eeg_name="CZ")
+        predicted_cz = sls_cz.predict()
 
-    sls_c4 = yasa.SleepStaging(raw, eeg_name="C4")
-    predicted_c4 = sls_c4.predict()
-    
-    # Determine the consensus stage
-    consensus_stage = determine_consensus_stage(predicted_c3, predicted_cz, predicted_c4)
-    return consensus_stage
+        sls_c4 = yasa.SleepStaging(raw_epoch, eeg_name="C4")
+        predicted_c4 = sls_c4.predict()
+        
+        # Determine the consensus stage
+        consensus_stage = determine_consensus_stage(predicted_c3, predicted_cz, predicted_c4)
+        all_consensus_stages.extend(consensus_stage)
+
+    return all_consensus_stages
 
 def get_alphadelta_stages(raw, picks, threshold_ratio):
     # calculate alpha/delta ratio on each channel
@@ -509,13 +518,7 @@ for idx, param_dict in enumerate(bids_path_list):
             print(f"Result for subject {subject}, run {run}, method {method} already exists in results dataframe. Skipping this method.")
             continue
         if method == 'yasa':
-            # set maximum run duration for YASA staging due to memory constraints
-            run_duration_limit_for_yasa = 16 * 3600 # seconds
-            if (window_stop - window_start) > run_duration_limit_for_yasa:
-                print(f"Window length exceeds {run_duration_limit_for_yasa/3600} hours. Skipping due to memory constraints for YASA staging.")
-                continue
-            else:
-                predicted_stages = get_yasa_consensus_stages(raw.copy())
+            predicted_stages = get_yasa_consensus_stages(raw.copy())
         elif method[0:3] == 'ad_':
             if method == 'ad_scalp':
                 picks = scalp_channel_names
