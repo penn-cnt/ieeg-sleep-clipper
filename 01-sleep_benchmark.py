@@ -76,13 +76,13 @@ def get_yasa_consensus_stages(raw):
     raw = common_average_montage(raw, channels_to_include)
 
     # Sleep staging for C3, Cz, and C4
-    sls_c3 = yasa.SleepStaging(raw, eeg_name="C3") #['W' 'W' 'W' 'R' 'R' 'R' 'W' 'W' 'W' 'W' 'W' 'W' 'W' 'W' 'W' 'W']
+    sls_c3 = yasa.SleepStaging(raw, eeg_name="C3")
     predicted_c3 = sls_c3.predict()
 
-    sls_cz = yasa.SleepStaging(raw, eeg_name="CZ") #['N2' 'N2' 'N2' 'N1' 'N2' 'N1' 'W' 'W' 'W' 'W' 'W' 'N1' 'R' 'R' 'R' 'R']
+    sls_cz = yasa.SleepStaging(raw, eeg_name="CZ")
     predicted_cz = sls_cz.predict()
 
-    sls_c4 = yasa.SleepStaging(raw, eeg_name="C4") #['W' 'W' 'W' 'W' 'N2' 'R' 'R' 'W' 'W' 'W' 'W' 'W' 'W' 'W' 'W' 'W']
+    sls_c4 = yasa.SleepStaging(raw, eeg_name="C4")
     predicted_c4 = sls_c4.predict()
     
     # Determine the consensus stage
@@ -258,7 +258,7 @@ else:
     for param_dict in bids_path_list:
         subject = param_dict['subject']
         run = param_dict['run']
-        result_row = {'Subject': subject, 'Run': run}
+        result_row = {'Subject': subject, 'Run': run, 'Duration_seconds': np.nan}
         for method in param_dict['staging_methods']:
             if method in staging_methods_to_column_names:
                 result_row[staging_methods_to_column_names[method]] = np.nan
@@ -306,7 +306,8 @@ for idx, param_dict in enumerate(bids_path_list):
                     method_column = staging_methods_to_column_names[method]
                     # exclude 'Average' row
                     valid_runs = patient_results[patient_results['Run'] != 'Average']
-                    avg_percent_agreement = valid_runs[method_column].mean()
+                    # calculate average weighted by run duration
+                    avg_percent_agreement = valid_runs[method_column].mul(valid_runs['Duration_seconds']).sum() / valid_runs['Duration_seconds'].sum()
                     results_df.loc[(results_df['Subject'] == last_patient) & (results_df['Run'] == 'Average'), method_column] = avg_percent_agreement
                     print(f"Average percent agreement for method {method} for patient {last_patient}: {avg_percent_agreement:.2f}%")
             # overwrite results csv with new data
@@ -439,6 +440,9 @@ for idx, param_dict in enumerate(bids_path_list):
         window_start = param_dict['window_start']
         window_stop = param_dict['window_stop']
 
+    # update Duration_seconds in results dataframe
+    results_df.loc[(results_df['Subject'] == subject) & (results_df['Run'] == run), 'Duration_seconds'] = test_duration
+
     # crop raw data to window_length seconds from window_start
     raw.crop(window_start, window_stop)
 
@@ -498,6 +502,9 @@ for idx, param_dict in enumerate(bids_path_list):
     for method in staging_methods:
         print(f"Using staging method: {method}")
         # check if result already exists in the dataframe for this subject, run, and staging method
+        if results_df.loc[(results_df['Subject'] == subject) & (results_df['Run'] == run), staging_methods_to_column_names[method]].values.size == 0:
+            print(f"No entry found in results dataframe for subject {subject}, run {run}, method {method}. Proceeding to stage.")
+            continue
         if not pd.isna(results_df.loc[(results_df['Subject'] == subject) & (results_df['Run'] == run), staging_methods_to_column_names[method]].values[0]):
             print(f"Result for subject {subject}, run {run}, method {method} already exists in results dataframe. Skipping this method.")
             continue
