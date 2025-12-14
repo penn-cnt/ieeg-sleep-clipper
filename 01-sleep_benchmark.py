@@ -69,7 +69,7 @@ def get_yasa_consensus_stages(raw):
     raw_duration = raw.n_times // raw.info['sfreq']
     all_consensus_stages = []
     # break raw into 1 hour epochs
-    for k in range(0, raw_duration, 3600):
+    for k in range(0, int(raw_duration), 3600):
         start_sec = k
         end_sec = min(k + 3600, raw_duration)
         raw_epoch = raw.copy().crop(tmin=start_sec, tmax=end_sec)
@@ -78,7 +78,7 @@ def get_yasa_consensus_stages(raw):
         # downsample to 100 Hz
         raw_epoch.resample(100, npad="auto")
         # bandpass filter between 0.4 to 30 Hz
-        raw_epoch.filter(0.4, 30, fir_design="firwin")
+        raw_epoch.filter(0.4, 30, fir_design="firwin", verbose=False)
         # apply common average reference montage
         raw_epoch = common_average_montage(raw_epoch, channels_to_include)
 
@@ -240,6 +240,14 @@ current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
 if __name__ == "__main__":
     csv_filename = sys.argv[1] if len(sys.argv) > 1 else None
 
+# initialize dataframe to store results
+staging_methods_to_column_names = {
+    'yasa': 'Percent_Agreement_YASA',
+    'sleep_seeg': 'Percent_Agreement_SleepSEEG',
+    'ad_ieeg': f'Percent_Agreement_AD_Ratio_iEEG_{threshold_ratios["ad_ieeg"]}',
+    'ad_scalp': f'Percent_Agreement_AD_Ratio_scalp_{threshold_ratios["ad_scalp"]}',
+}
+
 if csv_filename:
     # construct dataframe from existing csv
     print(f"Loading existing results from {csv_filename}...")
@@ -251,15 +259,16 @@ if csv_filename:
     print(f"Saving results to existing CSV file: {csv_filename}")
     results_csv_path = csv_filename
 
-else:
-    # initialize dataframe to store results
-    staging_methods_to_column_names = {
-        'yasa': 'Percent_Agreement_YASA',
-        'sleep_seeg': 'Percent_Agreement_SleepSEEG',
-        'ad_ieeg': f'Percent_Agreement_AD_Ratio_iEEG_{threshold_ratios["ad_ieeg"]}',
-        'ad_scalp': f'Percent_Agreement_AD_Ratio_scalp_{threshold_ratios["ad_scalp"]}',
-    }
+    # set threshold ratios based on existing column names
+    for col in results_df.columns:
+        if 'Percent_Agreement_AD_Ratio_iEEG_' in col:
+            threshold_ratios['ad_ieeg'] = float(col.split('_')[-1])
+            staging_methods_to_column_names['ad_ieeg'] = col
+        elif 'Percent_Agreement_AD_Ratio_scalp_' in col:
+            threshold_ratios['ad_scalp'] = float(col.split('_')[-1])
+            staging_methods_to_column_names['ad_scalp'] = col
 
+else:
     column_names = [staging_methods_to_column_names[method] for method in auto_mode_staging_methods if method in staging_methods_to_column_names]
     results_df = pd.DataFrame(columns=['Subject', 'Run'] + column_names)
 
