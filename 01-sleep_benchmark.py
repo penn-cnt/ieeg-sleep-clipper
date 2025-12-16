@@ -69,9 +69,9 @@ def get_yasa_consensus_stages(raw):
     raw_duration = raw.n_times // raw.info['sfreq']
     all_consensus_stages = []
     # break raw into 1 hour epochs
-    for k in range(0, int(raw_duration), 3600):
+    for k in range(0, int(raw_duration), 3600*8):
         start_sec = k
-        end_sec = min(k + 3600, raw_duration)
+        end_sec = min(k + 3600*8, raw_duration)
         raw_epoch = raw.copy().crop(tmin=start_sec, tmax=end_sec)
         # only keep these channels
         raw_epoch.pick(channels_to_include)
@@ -324,7 +324,8 @@ for idx, param_dict in enumerate(bids_path_list):
                     method_column = staging_methods_to_column_names[method]
                     # exclude 'Average' row
                     valid_runs = patient_results[patient_results['Run'] != 'Average']
-                    # calculate average weighted by run duration
+                    # calculate the average percent agreement weighted by run duration, excluding NaN values
+                    valid_runs = valid_runs.dropna(subset=[method_column, 'Duration_seconds'])
                     avg_percent_agreement = valid_runs[method_column].mul(valid_runs['Duration_seconds']).sum() / valid_runs['Duration_seconds'].sum()
                     results_df.loc[(results_df['Subject'] == last_patient) & (results_df['Run'] == 'Average'), method_column] = avg_percent_agreement
                     print(f"Average percent agreement for method {method} for patient {last_patient}: {avg_percent_agreement:.2f}%")
