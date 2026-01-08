@@ -31,6 +31,7 @@ import pickle
 import sys
 
 MERGE_EVENT_LISTS = True
+YASA_ELECTRODE = 'C3'  # electrode to use for YASA staging when not using consensus
 
 def time_to_seconds(time_str):
     # converts a time string in the format HH:MM:SS to seconds
@@ -70,9 +71,8 @@ def get_yasa_consensus_stages(raw):
     channels_to_include = ['C3', 'C4', 'CZ', 'F3', 'F4', 'F7', 'F8', 'FP1', 'FP2', 'FZ', 'O1', 'O2', 'P3', 'P4', 'T3', 'T4', 'T5', 'T6']
     # get length of recording
     raw_duration = raw.times[-1]
-    #raw_duration = raw.duration
     all_consensus_stages = []
-    # break raw into 1 hour epochs
+    # break raw into epochs
     for k in range(0, int(raw_duration), 3600*8):
         start_sec = k
         end_sec = min(k + 3600*8, raw_duration)
@@ -82,9 +82,9 @@ def get_yasa_consensus_stages(raw):
         # only keep these channels
         raw_epoch.pick(channels_to_include)
         # downsample to 100 Hz
-        # raw_epoch.resample(100, npad="auto")
+        raw_epoch.resample(100, npad="auto")
         # bandpass filter between 0.4 to 30 Hz
-        # raw_epoch.filter(0.4, 30, fir_design="firwin", verbose=False)
+        raw_epoch.filter(0.4, 30, fir_design="firwin", verbose=False)
         # apply common average reference montage
         raw_epoch = common_average_montage(raw_epoch, channels_to_include)
 
@@ -103,6 +103,37 @@ def get_yasa_consensus_stages(raw):
         all_consensus_stages.extend(consensus_stage)
 
     return all_consensus_stages
+
+def get_yasa_stages(raw, electrode_name):
+    # Specify the channels to include in the analysis
+    channels_to_include = ['C3', 'C4', 'CZ', 'F3', 'F4', 'F7', 'F8', 'FP1', 'FP2', 'FZ', 'O1', 'O2', 'P3', 'P4', 'T3', 'T4', 'T5', 'T6']
+    # get length of recording
+    raw_duration = raw.times[-1]
+    all_predicted_stages = []
+    # break raw into epochs
+    print(f"Using electrode {electrode_name}...")
+    for k in range(0, int(raw_duration), 3600*8):
+        start_sec = k
+        end_sec = min(k + 3600*8, raw_duration)
+        raw_epoch = raw.copy().crop(tmin=start_sec, tmax=end_sec)
+        # load epoch data
+        raw_epoch.load_data()
+        # only keep these channels
+        raw_epoch.pick(channels_to_include)
+        # downsample to 100 Hz
+        raw_epoch.resample(100, npad="auto")
+        # bandpass filter between 0.4 to 30 Hz
+        raw_epoch.filter(0.4, 30, fir_design="firwin", verbose=False)
+        # apply common average reference montage
+        raw_epoch = common_average_montage(raw_epoch, channels_to_include)
+
+        # YASA sleep staging
+        sls = yasa.SleepStaging(raw_epoch, eeg_name=electrode_name)
+        predicted = sls.predict()
+        
+        all_predicted_stages.extend(predicted)
+
+    return all_predicted_stages
 
 def get_alphadelta_stages(raw, picks, threshold_ratio):
     # calculate alpha/delta ratio on each channel
@@ -338,9 +369,9 @@ else:
         raw_duration = raw.duration
         # divide run into 8-hour chunks
         for index, k in enumerate(range(0, int(raw_duration), segment_duration)):
-            start_sec = k
-            end_sec = min(k + segment_duration, raw_duration)
-            result_row = {'Subject': subject, 'Run': run, 'Segment': int(index+1), 'Duration_seconds': end_sec-start_sec}
+            segment_start_sec = k
+            segment_end_sec = min(k + segment_duration, raw_duration)
+            result_row = {'Subject': subject, 'Run': run, 'Segment': int(index+1), 'Duration_seconds': segment_end_sec-segment_start_sec}
             for method in param_dict['staging_methods']:
                 if method in staging_methods_to_column_names:
                     if isinstance(staging_methods_to_column_names[method], dict):
@@ -542,12 +573,12 @@ for idx, param_dict in enumerate(bids_path_list):
         merged_event_times = []
         merged_event_states = []
         seen_times = []
-        for time, state in combined_events:
+        for t, state in combined_events:
             tolerance = 1 # one second tolerance for merging events
-            if not any(abs(time - seen_time) <= tolerance for seen_time in seen_times):
-                merged_event_times.append(time)
+            if not any(abs(t - seen_time) <= tolerance for seen_time in seen_times):
+                merged_event_times.append(t)
                 merged_event_states.append(state)
-                seen_times.append(time)
+                seen_times.append(t)
         event_times = merged_event_times
         event_states = merged_event_states
 
@@ -589,7 +620,7 @@ for idx, param_dict in enumerate(bids_path_list):
     y_dict = {'N3': 0, 'N2': 1, 'N1': 2, 'REM': 3, 'wake': 4, 'W': 4, '1': 2, '2': 1, '3': 0, 'unknown': np.nan}
     event_y = [y_dict[state] for state in event_states]
     # convert to hours
-    event_x = [time/3600 for time in event_times]
+    event_x = [t/3600 for t in event_times]
 
     # plot vigilance states over time
     print("Plotting hypnogram of entire run...")
@@ -614,6 +645,9 @@ for idx, param_dict in enumerate(bids_path_list):
     if display_plots:
         plt.show()
 
+    # close figure
+    plt.close()
+
     if stage_full_recording:
         window_start = 0
         window_stop = raw.times[-1]
@@ -628,12 +662,13 @@ for idx, param_dict in enumerate(bids_path_list):
     print(f"Running automated sleep staging methods from {window_start/3600} to {(window_stop)/3600} hours... (entry {idx+1} of {len(bids_path_list)})")
 
     for index, k in enumerate(range(0, int(test_duration), segment_duration)):
-        start_sec = k
-        end_sec = min(k + segment_duration, raw.times[-1])
-        print(f"Staging segment {index+1} from {start_sec/3600} to {end_sec/3600} hours...")
-        segment_raw = raw.copy().crop(tmin=start_sec, tmax=end_sec)
+        segment_start_sec = k
+        segment_end_sec = min(k + segment_duration, raw.times[-1])
+        print(f"\nStaging segment {index+1} from {segment_start_sec/3600} to {segment_end_sec/3600} hours...")
+        segment_raw = raw.copy().crop(tmin=segment_start_sec, tmax=segment_end_sec)
 
         for method in staging_methods:
+            this_method_timer_start = time.time()
             print(f"Using staging method: {method}")
             # check if result already exists in the dataframe for this subject, run, and staging method
             if isinstance(staging_methods_to_column_names[method], dict):
@@ -648,7 +683,8 @@ for idx, param_dict in enumerate(bids_path_list):
                     print(f"Result for subject {subject}, run {run}, segment {index}, method {method} already exists in results dataframe. Skipping this method.")
                     continue
             if method == 'yasa':
-                predicted_stages = get_yasa_consensus_stages(segment_raw)
+                predicted_stages = get_yasa_stages(segment_raw, YASA_ELECTRODE)
+                # predicted_stages = get_yasa_consensus_stages(segment_raw)
             elif method[0:3] == 'ad_':
                 if method == 'ad_scalp':
                     picks = scalp_channel_names
@@ -707,10 +743,13 @@ for idx, param_dict in enumerate(bids_path_list):
                 
                 if display_plots:
                     plt.show()
+                
+                # close figure
+                plt.close()
 
             elif method == 'sleep_seeg':
                 # check if EDF file already exists for this run
-                edf_path = os.path.join(os.path.dirname(__file__), 'data', 'edf', f'{subject}_{session}_{task}_{run}_{window_start}_{window_stop}.edf')
+                edf_path = os.path.join(os.path.dirname(__file__), 'data', 'edf', f'{subject}_{session}_{task}_{run}_{segment_start_sec}_{segment_end_sec}.edf')
                 if os.path.exists(edf_path):
                     print(f"Using existing EDF file at {edf_path} for SleepSEEG staging.")
                 else:
@@ -747,7 +786,10 @@ for idx, param_dict in enumerate(bids_path_list):
                 print(f"Staging method {method} not recognized. Skipping...")
                 continue
 
-            print(f"Predicted {predicted_stages.count('W')} wake epochs and {len(predicted_stages) - predicted_stages.count('W')} sleep epochs using method {method}.")
+            # stop timer
+            this_method_timer_end = time.time()
+            method_time_elapsed = this_method_timer_end - this_method_timer_start
+            print(f"Predicted {predicted_stages.count('W')} wake epochs and {len(predicted_stages) - predicted_stages.count('W') - predicted_stages.count(np.nan)} sleep epochs using method {method} ({predicted_stages.count(np.nan)} epochs unable to be staged.) Processing time for this segment: {timedelta(seconds=method_time_elapsed)}")
             # calculate overlap coefficient between predicted_stages and manual stages
             overall_percent_agreement, wake_sleep_percent_agreement = get_percent_agreement(run_events, predicted_stages, window_start, 30)
             print(f"Overall percent agreement between predicted stages and manual stages: {overall_percent_agreement:.2f}%")
@@ -765,6 +807,7 @@ for idx, param_dict in enumerate(bids_path_list):
                 results_df.to_csv(results_csv_path, index=False)
                 print(f"Saved updated results to {results_csv_path}.")
 
+            # TODO: saving hypnograms by segment properly
             # x values for predicted stages
             stage_x = np.arange(window_start, window_start + len(predicted_stages)*30, 30) / 3600  # assuming 30-second epochs
             y_dict_prediction = {'N3': 0, 'N2': 1, 'N1': 2, 'R': 3, 'W': 4, 'sleep': np.nan, np.nan: np.nan}
@@ -794,10 +837,13 @@ for idx, param_dict in enumerate(bids_path_list):
             
             if display_plots:
                 plt.show()
+            
+            # close figure
+            plt.close()
 
     # end timer
     end_time = time.time()
     total_processing_time += end_time - start_time
-    print(f"Processing time = {timedelta(seconds=end_time-start_time)}")
+    print(f"Patient processing time = {timedelta(seconds=end_time-start_time)}")
 
 print(f"Total processing time = {timedelta(seconds=total_processing_time)}")
