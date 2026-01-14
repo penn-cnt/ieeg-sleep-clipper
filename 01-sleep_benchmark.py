@@ -24,11 +24,18 @@ from mne_bids import (
     read_raw_bids,
     write_raw_bids
 )
-import matlab
-import matlab.engine
+MATLAB_AVAILABLE = True
+try:
+    import matlab
+    import matlab.engine
+except ModuleNotFoundError as e:
+    MATLAB_AVAILABLE = False
+    print(f"ModuleNotFoundError: {e}")
+    print("MATLAB engine for Python not available. SleepSEEG staging will be disabled.")
 import pandas as pd
 import pickle
 import sys
+import io
 
 MERGE_EVENT_LISTS = True
 YASA_ELECTRODE = 'C3'  # electrode to use for YASA staging when not using consensus
@@ -182,21 +189,21 @@ def channel_ratios_to_stages(channel_ratios_by_epoch, threshold_ratio):
             predicted_stages.append('W')
     return predicted_stages, avg_ratios
 
-def get_percent_agreement(run_events, predicted_stages, window_start, stage_duration):
-    # window_start, window_length, and stage_duration are in seconds
+def get_percent_agreement(run_events, predicted_stages, segment_start, stage_duration):
+    # segment_start, window_length, and stage_duration are in seconds
     # analogous to Dice coefficient, for agreement between two categorical discrete time series
     # Percent agreement = (number of stages in the prediction that match the manual stage at the corresponding time point / total number of epochs in the prediction) * 100%
     # returns: overall percent agreement, wake/sleep percent agreement
     tolerance = stage_duration / 2  # stage predictions that occur within a tolerance of a change in manual stage are assigned the new manual stage for comparison
     # create list of time from start of window for each run event
     if run_events.shape[1] == 2:
-        relative_event_times = [float(time) for time in run_events[:,0]]
+        relative_event_times = [float(time)-segment_start for time in run_events[:,0]]
     else:
         event_times = np.cumsum(run_events[:,1].astype(float))
         event_times = np.insert(event_times, 0, 0) # insert 0 as first element
         event_times = event_times[:-1] # remove last element
-        # subtract window_start from each time so that a time of 0 corresponds to start of window
-        relative_event_times = event_times - window_start
+        # subtract segment_start from each time so that a time of 0 corresponds to start of segment
+        relative_event_times = event_times - segment_start
     #print([[time,stage] for time,stage in zip(relative_event_times, run_events[:,3])])
     # for each consensus stage, find the closest corresponding manual stage
     match_count = 0
@@ -476,15 +483,6 @@ for idx, param_dict in enumerate(bids_path_list):
             #print(f"{annot['onset']}, {annot['duration']}, {annot['description']}")
             continue
 
-    # read channels.tsv for this run to determine channel types
-    channels_tsv_path = bids_path.copy().update(suffix="channels", extension=".tsv")
-    channels_data = np.loadtxt(channels_tsv_path.fpath, dtype=str, delimiter="\t", skiprows=1)
-    scalp_channel_names = channels_data[channels_data[:,1] == "EEG"][:,0].tolist()
-    ieeg_channel_names = channels_data[channels_data[:,1] == "SEEG"][:,0].tolist()
-    # convert electrode names to uppercase
-    scalp_channel_names = [name.upper() for name in scalp_channel_names]
-    ieeg_channel_names = [name.upper() for name in ieeg_channel_names]
-
     # read events.tsv in the same folder
     events_tsv_path = bids_path.copy().update(suffix="events", extension=".tsv", task=None, run=None)
 
@@ -543,7 +541,11 @@ for idx, param_dict in enumerate(bids_path_list):
     # assert that run_events and lay_run_events do not both contain two or more entries
     # assert (not (len(run_events) >= 2) and (len(lay_run_events) >= 2)), "Both events.tsv and layout file comments contain two or more vigilance events. Please investigate."
 
-    # TODO: merge run events from run_events and lay_run_events
+    # check if no vigilance events found in either source
+    if (len(run_events) == 0) and (len(lay_run_events) == 0):
+        print("No vigilance events found in either events.tsv or layout file comments. Skipping this run.")
+        continue
+
     if MERGE_EVENT_LISTS:
         print("Merging vigilance events from events.tsv and layout file comments...")
         
@@ -657,35 +659,49 @@ for idx, param_dict in enumerate(bids_path_list):
         window_stop = param_dict['window_stop']
 
     # crop raw data to window_length seconds from window_start
-    raw.crop(window_start, window_stop)
+    # raw.crop(window_start, window_stop)
 
     print(f"Running automated sleep staging methods from {window_start/3600} to {(window_stop)/3600} hours... (entry {idx+1} of {len(bids_path_list)})")
 
-    for index, k in enumerate(range(0, int(test_duration), segment_duration)):
+    for index, k in enumerate(range(window_start, int(window_stop), segment_duration)):
         segment_start_sec = k
-        segment_end_sec = min(k + segment_duration, raw.times[-1])
+        segment_end_sec = min(k + segment_duration, window_stop)
         print(f"\nStaging segment {index+1} from {segment_start_sec/3600} to {segment_end_sec/3600} hours...")
-        segment_raw = raw.copy().crop(tmin=segment_start_sec, tmax=segment_end_sec)
-
+        
         for method in staging_methods:
-            this_method_timer_start = time.time()
             print(f"Using staging method: {method}")
             # check if result already exists in the dataframe for this subject, run, and staging method
             if isinstance(staging_methods_to_column_names[method], dict):
                 this_entry_wake_sleep = results_df.loc[(results_df['Subject'] == subject) & (results_df['Run'] == run) & (results_df['Segment'] == index+1), staging_methods_to_column_names[method]['wake_sleep']]
                 this_entry_all_stages = results_df.loc[(results_df['Subject'] == subject) & (results_df['Run'] == run) & (results_df['Segment'] == index+1), staging_methods_to_column_names[method]['all_stages']]
                 if ((this_entry_wake_sleep.values.size != 0) and (not pd.isna(this_entry_wake_sleep.values[0]))) and ((this_entry_all_stages.values.size != 0) and (not pd.isna(this_entry_all_stages.values[0]))):
-                    print(f"Results for subject {subject}, run {run}, segment {index}, method {method} already exist in results dataframe. Skipping this method.")
+                    print(f"Results for subject {subject}, run {run}, segment {index+1}, method {method} already exist in results dataframe. Skipping this method.")
                     continue
             else:
                 this_entry = results_df.loc[(results_df['Subject'] == subject) & (results_df['Run'] == run) & (results_df['Segment'] == index+1), staging_methods_to_column_names[method]]
                 if (this_entry.values.size != 0) and (not pd.isna(this_entry.values[0])):
-                    print(f"Result for subject {subject}, run {run}, segment {index}, method {method} already exists in results dataframe. Skipping this method.")
+                    print(f"Result for subject {subject}, run {run}, segment {index+1}, method {method} already exists in results dataframe. Skipping this method.")
                     continue
+
+            this_method_timer_start = time.time()
+            segment_raw = raw.copy().crop(tmin=segment_start_sec, tmax=segment_end_sec)
+
             if method == 'yasa':
                 predicted_stages = get_yasa_stages(segment_raw, YASA_ELECTRODE)
                 # predicted_stages = get_yasa_consensus_stages(segment_raw)
             elif method[0:3] == 'ad_':
+                # read channels.tsv for this run to determine channel types
+                channels_tsv_path = bids_path.copy().update(suffix="channels", extension=".tsv")
+                try:
+                    channels_data = np.loadtxt(channels_tsv_path.fpath, dtype=str, delimiter="\t", skiprows=1)
+                except Exception as e:
+                    print(f"Error reading channels.tsv from {channels_tsv_path.fpath}: {e}\nSkipping alpha/delta staging for this segment.")
+                    continue
+                scalp_channel_names = channels_data[channels_data[:,1] == "EEG"][:,0].tolist()
+                ieeg_channel_names = channels_data[channels_data[:,1] == "SEEG"][:,0].tolist()
+                # convert electrode names to uppercase
+                scalp_channel_names = [name.upper() for name in scalp_channel_names]
+                ieeg_channel_names = [name.upper() for name in ieeg_channel_names]
                 if method == 'ad_scalp':
                     picks = scalp_channel_names
                     threshold_ratio = threshold_ratios[method]
@@ -718,17 +734,17 @@ for idx, param_dict in enumerate(bids_path_list):
                         pickle.dump(channel_ratios_by_epoch, f)
                     print(f"Saved channel alpha/delta ratios to {channel_ratios_path}.")
                 # use only this segment of predicted stages and average ad ratios
-                predicted_stages = predicted_stages[k//30:(k+segment_duration)//30]
-                avg_ad_ratios = avg_ad_ratios[k//30:(k+segment_duration)//30]
+                predicted_stages = predicted_stages[segment_start_sec//30:(segment_start_sec+segment_duration)//30]
+                avg_ad_ratios = avg_ad_ratios[segment_start_sec//30:(segment_start_sec+segment_duration)//30]
 
                 # plot average alpha/delta ratios over time
                 plt.figure(figsize=(10, 4))
-                ad_x = np.arange(window_start, window_start + len(avg_ad_ratios)*30, 30) / 3600  # assuming 30-second epochs
+                ad_x = np.arange(segment_start_sec, segment_start_sec + len(avg_ad_ratios)*30, 30) / 3600  # assuming 30-second epochs
                 plt.plot(ad_x, avg_ad_ratios, marker=',')
                 plt.xlabel(f'Time (hrs) (t=0 is {test_time})')
                 plt.ylabel('Average Alpha/Delta Ratio')
-                plt.title(f'Average alpha/delta ratios for {subject}, session {session}, task {task}, run {run} ({method})')
-                plt.xlim(window_start/3600, (window_stop)/3600)
+                plt.title(f'Average alpha/delta ratios for {subject}, session {session}, task {task}, run {run}, segment {index+1} ({method})')
+                plt.xlim(segment_start_sec/3600, (segment_end_sec)/3600)
                 plt.axhline(y=threshold_ratio, color='r', linestyle='--')
                 plt.grid()
                 
@@ -737,7 +753,7 @@ for idx, param_dict in enumerate(bids_path_list):
                     if not os.path.exists(os.path.join(os.path.dirname(__file__), "figures", subject, current_time)):
                         os.makedirs(os.path.join(os.path.dirname(__file__), "figures", subject, current_time), exist_ok=True)
                     
-                    save_path = os.path.join(os.path.dirname(__file__), "figures", subject, current_time, f'{subject}_{session}_{task}_{run}_{window_start}_{window_stop}_avg_ad_ratios_{method}.png')
+                    save_path = os.path.join(os.path.dirname(__file__), "figures", subject, current_time, f'{subject}_{session}_{task}_{run}_{segment_start_sec}_{segment_end_sec}_avg_ad_ratios_{method}.png')
                     plt.savefig(save_path)
                     print(f"Saved average alpha/delta ratio figure to {save_path}.")
                 
@@ -755,16 +771,29 @@ for idx, param_dict in enumerate(bids_path_list):
                 else:
                     # write file as EDF format for SleepSEEG
                     print("Exporting EDF file for SleepSEEG staging...")
+                    # read channels.tsv for this run to determine channel types
+                    channels_tsv_path = bids_path.copy().update(suffix="channels", extension=".tsv")
+                    try:
+                        channels_data = np.loadtxt(channels_tsv_path.fpath, dtype=str, delimiter="\t", skiprows=1)
+                    except Exception as e:
+                        print(f"Error reading channels.tsv from {channels_tsv_path.fpath}: {e}\nSkipping SleepSEEG staging for this segment.")
+                        continue
+                    ieeg_channel_names = channels_data[channels_data[:,1] == "SEEG"][:,0].tolist()
+                    ieeg_channel_names = [name.upper() for name in ieeg_channel_names]
                     # create directory in data folder
                     os.makedirs(os.path.join(os.path.dirname(__file__), 'data', 'edf'), exist_ok=True)
                     mne.export.export_raw(edf_path, segment_raw.pick(picks=ieeg_channel_names).resample(200, npad="auto"), fmt='edf', overwrite=True)
                     print(f"EDF file written to {edf_path} for SleepSEEG staging.")
+                if not MATLAB_AVAILABLE:
+                    print("MATLAB engine for Python not available. Skipping SleepSEEG staging.")
+                    continue
                 # start MATLAB engine
                 eng = matlab.engine.start_matlab()
                 # add SleepSEEG folder to MATLAB path
                 eng.addpath(sleep_seeg_path)
                 # call SleepSEEG function
-                sleep_seeg_summary,sleep_seeg_stages = eng.SleepSEEG(edf_path, 0, nargout=2)
+                out = io.StringIO()
+                sleep_seeg_summary,sleep_seeg_stages = eng.SleepSEEG(edf_path, 0, nargout=2, stdout=out)
                 # convert MATLAB cell array to Python list
                 sleep_seeg_summary = [str(stage) for stage in sleep_seeg_summary]
                 #print(f"SleepSEEG predicted stages: {predicted_stages}")
@@ -789,9 +818,9 @@ for idx, param_dict in enumerate(bids_path_list):
             # stop timer
             this_method_timer_end = time.time()
             method_time_elapsed = this_method_timer_end - this_method_timer_start
-            print(f"Predicted {predicted_stages.count('W')} wake epochs and {len(predicted_stages) - predicted_stages.count('W') - predicted_stages.count(np.nan)} sleep epochs using method {method} ({predicted_stages.count(np.nan)} epochs unable to be staged.) Processing time for this segment: {timedelta(seconds=method_time_elapsed)}")
+            print(f"Predicted {predicted_stages.count('W')} wake epochs and {len(predicted_stages) - predicted_stages.count('W') - predicted_stages.count(np.nan)} sleep epochs using method {method} ({predicted_stages.count(np.nan)} epochs unable to be staged.) Processing time for this segment and method: {timedelta(seconds=method_time_elapsed)}")
             # calculate overlap coefficient between predicted_stages and manual stages
-            overall_percent_agreement, wake_sleep_percent_agreement = get_percent_agreement(run_events, predicted_stages, window_start, 30)
+            overall_percent_agreement, wake_sleep_percent_agreement = get_percent_agreement(run_events, predicted_stages, segment_start_sec, 30)
             print(f"Overall percent agreement between predicted stages and manual stages: {overall_percent_agreement:.2f}%")
             print(f"Wake/sleep percent agreement between predicted stages and manual stages: {wake_sleep_percent_agreement:.2f}%")
 
@@ -807,16 +836,15 @@ for idx, param_dict in enumerate(bids_path_list):
                 results_df.to_csv(results_csv_path, index=False)
                 print(f"Saved updated results to {results_csv_path}.")
 
-            # TODO: saving hypnograms by segment properly
             # x values for predicted stages
-            stage_x = np.arange(window_start, window_start + len(predicted_stages)*30, 30) / 3600  # assuming 30-second epochs
+            stage_x = np.arange(segment_start_sec, segment_start_sec + len(predicted_stages)*30, 30) / 3600  # assuming 30-second epochs
             y_dict_prediction = {'N3': 0, 'N2': 1, 'N1': 2, 'R': 3, 'W': 4, 'sleep': np.nan, np.nan: np.nan}
             stage_y = [y_dict_prediction[stage] for stage in predicted_stages]
 
             print("Plotting hypnogram for cropped data...")
             plt.figure(figsize=(10, 4))
             plt.step(event_x, event_y, where='post', label='Manual Staging', color='tab:blue', alpha=0.5)
-            plt.xlim(window_start/3600, (window_stop)/3600)
+            plt.xlim(segment_start_sec/3600, (segment_end_sec)/3600)
             plt.xlabel(f'Time (hrs) (t=0 is {test_time})')
             plt.ylabel('Vigilance State')
             plt.title(f'Cropped hypnogram for {subject}, session {session}, task {task}, run {run}')
