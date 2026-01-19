@@ -38,7 +38,7 @@ import sys
 import io
 
 MERGE_EVENT_LISTS = True
-YASA_ELECTRODE = 'C3'  # electrode to use for YASA staging when not using consensus
+#YASA_ELECTRODE = 'C3'  # electrode to use for YASA staging when not using consensus
 
 def time_to_seconds(time_str):
     # converts a time string in the format HH:MM:SS to seconds
@@ -123,16 +123,20 @@ def get_yasa_stages(raw, electrode_name):
         start_sec = k
         end_sec = min(k + 3600*8, raw_duration)
         raw_epoch = raw.copy().crop(tmin=start_sec, tmax=end_sec)
-        # load epoch data
-        raw_epoch.load_data()
         # only keep these channels
         raw_epoch.pick(channels_to_include)
         # downsample to 100 Hz
         raw_epoch.resample(100, npad="auto")
+        # load epoch data
+        raw_epoch.load_data()
         # bandpass filter between 0.4 to 30 Hz
         raw_epoch.filter(0.4, 30, fir_design="firwin", verbose=False)
         # apply common average reference montage
         raw_epoch = common_average_montage(raw_epoch, channels_to_include)
+
+        # print number of channels, epoch length, and sampling rate
+        print(f"Number of channels: {len(raw_epoch.ch_names)}, Epoch length (s): {raw_epoch.times[-1]-raw_epoch.times[0]}, Sampling rate (Hz): {raw_epoch.info['sfreq']}")
+        print("Staging with YASA...")
 
         # YASA sleep staging
         sls = yasa.SleepStaging(raw_epoch, eeg_name=electrode_name)
@@ -141,6 +145,33 @@ def get_yasa_stages(raw, electrode_name):
         all_predicted_stages.extend(predicted)
 
     return all_predicted_stages
+
+def get_yasa_stages_dict(raw, electrode_names):
+    stages_dict = {}
+    # preprocessing for YASA
+    # Specify the channels to include in the analysis
+    channels_to_include = ['C3', 'C4', 'CZ', 'F3', 'F4', 'F7', 'F8', 'FP1', 'FP2', 'FZ', 'O1', 'O2', 'P3', 'P4', 'T3', 'T4', 'T5', 'T6']
+    raw_epoch = raw.copy()
+    raw_epoch.pick(channels_to_include)
+    raw_epoch.resample(100, npad="auto")
+    raw_epoch.load_data()
+    raw_epoch.filter(0.4, 30, fir_design="firwin", verbose=False)
+    raw_montage = common_average_montage(raw_epoch, channels_to_include)
+    print(f"Number of channels: {len(raw_montage.ch_names)}, Recording length (s): {raw_montage.times[-1]-raw_montage.times[0]}, Sampling rate (Hz): {raw_montage.info['sfreq']}")
+    print("Staging with YASA...")
+    for electrode in electrode_names:
+        print(f"Using electrode {electrode}...")
+        sls = yasa.SleepStaging(raw_montage, eeg_name=electrode)
+        predicted = sls.predict()
+        stages_dict[electrode] = predicted
+    return stages_dict
+
+def yasa_dict_to_consensus_stages(yasa_staging_dict):
+    predicted_c3 = yasa_staging_dict['C3']
+    predicted_cz = yasa_staging_dict['CZ']
+    predicted_c4 = yasa_staging_dict['C4']
+    consensus_stages = determine_consensus_stage(predicted_c3, predicted_cz, predicted_c4)
+    return consensus_stages
 
 def get_alphadelta_stages(raw, picks, threshold_ratio):
     # calculate alpha/delta ratio on each channel
@@ -663,6 +694,11 @@ for idx, param_dict in enumerate(bids_path_list):
 
     print(f"Running automated sleep staging methods from {window_start/3600} to {(window_stop)/3600} hours... (entry {idx+1} of {len(bids_path_list)})")
 
+    # # TODO: skip certain subjects and runs temporarily
+    # if subject == 'umich0024':
+    #     print(f"Skipping subject {subject}, run {run} due to memory issues.")
+    #     continue
+
     for index, k in enumerate(range(window_start, int(window_stop), segment_duration)):
         segment_start_sec = k
         segment_end_sec = min(k + segment_duration, window_stop)
@@ -687,8 +723,29 @@ for idx, param_dict in enumerate(bids_path_list):
             segment_raw = raw.copy().crop(tmin=segment_start_sec, tmax=segment_end_sec)
 
             if method == 'yasa':
-                predicted_stages = get_yasa_stages(segment_raw, YASA_ELECTRODE)
-                # predicted_stages = get_yasa_consensus_stages(segment_raw)
+                # check if pkl file with YASA staging results already exists for this segment
+                yasa_results_path = os.path.join(os.path.dirname(__file__), 'data', 'yasa_staging', f'yasa_staging_{subject}_{session}_{task}_{run}_{segment_start_sec}_{segment_end_sec}.pkl')
+                if os.path.exists(yasa_results_path):
+                    print(f"Loading precomputed YASA staging results from {yasa_results_path}...")
+                    with open(yasa_results_path, 'rb') as f:
+                        yasa_staging_dict = pickle.load(f)
+                else:
+                    if subject in ['umich0021','umich0022','umich0024']:
+                        # TODO: temporarily skip subjects
+                        print(f"Skipping YASA staging for subject {subject} due to memory issues.")
+                        continue
+                    yasa_staging_dict = get_yasa_stages_dict(segment_raw, ['C3','CZ','C4'])
+                    # save to pickle
+                    os.makedirs(os.path.join(os.path.dirname(__file__), 'data', 'yasa_staging'), exist_ok=True)
+                    with open(yasa_results_path, 'wb') as f:
+                        pickle.dump(yasa_staging_dict, f)
+                    print(f"Saved YASA staging results to {yasa_results_path}.")
+                # print first 10 entries of each key in yasa_staging_dict
+                print("YASA staging dictionary keys and first 10 entries:")
+                for key in yasa_staging_dict:
+                    print(f"{key}: {yasa_staging_dict[key][:10]}")
+                print("Determining consensus stages...")
+                predicted_stages = yasa_dict_to_consensus_stages(yasa_staging_dict)
             elif method[0:3] == 'ad_':
                 # read channels.tsv for this run to determine channel types
                 channels_tsv_path = bids_path.copy().update(suffix="channels", extension=".tsv")
@@ -764,6 +821,10 @@ for idx, param_dict in enumerate(bids_path_list):
                 plt.close()
 
             elif method == 'sleep_seeg':
+                # TODO: skip certain subjects temporarily
+                if subject in ['umich0024']:
+                    print(f"Skipping SleepSEEG staging for subject {subject} due to EDF export issues.")
+                    continue
                 # check if EDF file already exists for this run
                 edf_path = os.path.join(os.path.dirname(__file__), 'data', 'edf', f'{subject}_{session}_{task}_{run}_{segment_start_sec}_{segment_end_sec}.edf')
                 if os.path.exists(edf_path):
@@ -782,7 +843,8 @@ for idx, param_dict in enumerate(bids_path_list):
                     ieeg_channel_names = [name.upper() for name in ieeg_channel_names]
                     # create directory in data folder
                     os.makedirs(os.path.join(os.path.dirname(__file__), 'data', 'edf'), exist_ok=True)
-                    mne.export.export_raw(edf_path, segment_raw.pick(picks=ieeg_channel_names).resample(200, npad="auto"), fmt='edf', overwrite=True)
+                    segment_raw_for_edf = segment_raw.copy().pick(picks=ieeg_channel_names).resample(200, npad="auto")
+                    mne.export.export_raw(edf_path, segment_raw_for_edf, fmt='edf', overwrite=True)
                     print(f"EDF file written to {edf_path} for SleepSEEG staging.")
                 if not MATLAB_AVAILABLE:
                     print("MATLAB engine for Python not available. Skipping SleepSEEG staging.")
@@ -836,6 +898,7 @@ for idx, param_dict in enumerate(bids_path_list):
                 results_df.to_csv(results_csv_path, index=False)
                 print(f"Saved updated results to {results_csv_path}.")
 
+            # TODO: saving hypnograms by segment properly
             # x values for predicted stages
             stage_x = np.arange(segment_start_sec, segment_start_sec + len(predicted_stages)*30, 30) / 3600  # assuming 30-second epochs
             y_dict_prediction = {'N3': 0, 'N2': 1, 'N1': 2, 'R': 3, 'W': 4, 'sleep': np.nan, np.nan: np.nan}
