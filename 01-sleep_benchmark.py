@@ -239,6 +239,11 @@ def get_percent_agreement(run_events, predicted_stages, segment_start, stage_dur
     # for each consensus stage, find the closest corresponding manual stage
     match_count = 0
     wake_sleep_match_count = 0
+    wake_sleep_tp = 0
+    wake_sleep_tn = 0
+    wake_sleep_fp = 0
+    wake_sleep_fn = 0
+    nan_prediction_count = 0
     for i in range(len(predicted_stages)):
         corresponding_manual_stage = None
         predicted_stage_start = i * stage_duration
@@ -261,11 +266,22 @@ def get_percent_agreement(run_events, predicted_stages, segment_start, stage_dur
                 # check for wake/sleep match
                 if ((isinstance(predicted_stages[i], str)) and (((predicted_stages[i][0].lower() == 'w') and (corresponding_manual_stage == 'wake')) or ((predicted_stages[i][0].lower() != 'w') and (corresponding_manual_stage in ['N1','N2','N3','REM'])))):
                     wake_sleep_match_count += 1
+                    if (predicted_stages[i][0].lower() == 'w'):
+                        wake_sleep_tp += 1
+                    else:
+                        wake_sleep_tn += 1
+                else:
+                    if (not (isinstance(predicted_stages[i], str))):
+                        nan_prediction_count += 1
+                    elif (predicted_stages[i][0].lower() == 'w'):
+                        wake_sleep_fp += 1
+                    else:
+                        wake_sleep_fn += 1
                 break
         #print(f"Predicted stage: {predicted_stages[i]}, Manual stage: {corresponding_manual_stage}")
     percent_agreement = (match_count / len(predicted_stages)) * 100
     wake_sleep_percent_agreement = (wake_sleep_match_count / len(predicted_stages)) * 100
-    return percent_agreement, wake_sleep_percent_agreement
+    return percent_agreement, wake_sleep_percent_agreement, wake_sleep_tp, wake_sleep_tn, wake_sleep_fp, wake_sleep_fn, nan_prediction_count
 
 # threshold ratios for different alpha/delta methods
 threshold_ratios = {
@@ -329,6 +345,13 @@ staging_methods_to_column_names = {
     'ad_scalp': f'Wake_Sleep_Percent_Agreement_AD_Ratio_scalp_{threshold_ratios["ad_scalp"]}',
 }
 
+staging_methods_to_prediction_count_column_names = {
+    'yasa': ['Wake_Sleep_YASA_TP', 'Wake_Sleep_YASA_TN', 'Wake_Sleep_YASA_FP', 'Wake_Sleep_YASA_FN', 'Wake_Sleep_YASA_NaN'],
+    'sleep_seeg': ['Wake_Sleep_SleepSEEG_TP', 'Wake_Sleep_SleepSEEG_TN', 'Wake_Sleep_SleepSEEG_FP', 'Wake_Sleep_SleepSEEG_FN', 'Wake_Sleep_SleepSEEG_NaN'],
+    'ad_ieeg': ['Wake_Sleep_AD_Ratio_iEEG_TP', 'Wake_Sleep_AD_Ratio_iEEG_TN', 'Wake_Sleep_AD_Ratio_iEEG_FP', 'Wake_Sleep_AD_Ratio_iEEG_FN', 'Wake_Sleep_AD_Ratio_iEEG_NaN'],
+    'ad_scalp': ['Wake_Sleep_AD_Ratio_scalp_TP', 'Wake_Sleep_AD_Ratio_scalp_TN', 'Wake_Sleep_AD_Ratio_scalp_FP', 'Wake_Sleep_AD_Ratio_scalp_FN', 'Wake_Sleep_AD_Ratio_scalp_NaN']
+}
+
 # set segment duration to 8 hours
 segment_duration = 3600*8
 
@@ -357,6 +380,8 @@ else:
     for method in auto_mode_staging_methods:
         if method in staging_methods_to_column_names:
             column_names += list(staging_methods_to_column_names[method].values()) if isinstance(staging_methods_to_column_names[method], dict) else [staging_methods_to_column_names[method]]
+        if method in staging_methods_to_prediction_count_column_names:
+            column_names += staging_methods_to_prediction_count_column_names[method]
 
     # column_names = [staging_methods_to_column_names[method] for method in auto_mode_staging_methods if method in staging_methods_to_column_names]
     results_df = pd.DataFrame(columns=['Subject', 'Run', 'Segment'] + column_names + ['Duration_seconds'])
@@ -398,13 +423,14 @@ else:
                 f.writelines(lines)
         try:
             raw = mne.io.read_raw_persyst(bids_path, preload=False, verbose=False)
+            raw_duration = raw.duration
         except FileNotFoundError as e:
             print(f"Error reading raw data: {e}")
             continue
         except RuntimeError as e:
             print(f"Error reading raw data: {e}")
             continue
-        raw_duration = raw.duration
+        
         # divide run into 8-hour chunks
         for index, k in enumerate(range(0, int(raw_duration), segment_duration)):
             segment_start_sec = k
@@ -730,10 +756,10 @@ for idx, param_dict in enumerate(bids_path_list):
                     with open(yasa_results_path, 'rb') as f:
                         yasa_staging_dict = pickle.load(f)
                 else:
-                    if subject in ['umich0021','umich0022','umich0024']:
-                        # TODO: temporarily skip subjects
-                        print(f"Skipping YASA staging for subject {subject} due to memory issues.")
-                        continue
+                    # if subject in ['umich0021','umich0022','umich0024']:
+                    #     # TODO: temporarily skip subjects
+                    #     print(f"Skipping YASA staging for subject {subject} due to memory issues.")
+                    #     continue
                     yasa_staging_dict = get_yasa_stages_dict(segment_raw, ['C3','CZ','C4'])
                     # save to pickle
                     os.makedirs(os.path.join(os.path.dirname(__file__), 'data', 'yasa_staging'), exist_ok=True)
@@ -751,14 +777,44 @@ for idx, param_dict in enumerate(bids_path_list):
                 channels_tsv_path = bids_path.copy().update(suffix="channels", extension=".tsv")
                 try:
                     channels_data = np.loadtxt(channels_tsv_path.fpath, dtype=str, delimiter="\t", skiprows=1)
+                    ieeg_channel_names = channels_data[channels_data[:,1] == "SEEG"][:,0].tolist()
+                    ieeg_channel_names = [name.upper() for name in ieeg_channel_names]
+                    scalp_channel_names = channels_data[channels_data[:,1] == "EEG"][:,0].tolist()
+                    scalp_channel_names = [name.upper() for name in scalp_channel_names]
                 except Exception as e:
-                    print(f"Error reading channels.tsv from {channels_tsv_path.fpath}: {e}\nSkipping alpha/delta staging for this segment.")
-                    continue
-                scalp_channel_names = channels_data[channels_data[:,1] == "EEG"][:,0].tolist()
-                ieeg_channel_names = channels_data[channels_data[:,1] == "SEEG"][:,0].tolist()
-                # convert electrode names to uppercase
-                scalp_channel_names = [name.upper() for name in scalp_channel_names]
-                ieeg_channel_names = [name.upper() for name in ieeg_channel_names]
+                    print(f"Error reading channels.tsv from {channels_tsv_path.fpath}: {e}")
+                    print("Attempting to load channel names from other runs for this patient...")
+                    # load channels_data from other runs for this patient
+                    ieeg_channel_names_all_runs = []
+                    scalp_channel_names_all_runs = []
+                    # get all runs for this subject
+                    subject_bids_paths = [p for p in bids_path_list if p['subject'] == subject]
+                    for subject_bids_path in subject_bids_paths:
+                        other_channels_tsv_path = BIDSPath(root=bids_root, subject=subject_bids_path['subject'], session='ieeg01', task='all', run=subject_bids_path['run'], datatype='ieeg', suffix='channels', extension='.tsv')
+                        try:
+                            other_channels_data = np.loadtxt(other_channels_tsv_path.fpath, dtype=str, delimiter="\t", skiprows=1)
+                            other_ieeg_channel_names = other_channels_data[other_channels_data[:,1] == "SEEG"][:,0].tolist()
+                            other_ieeg_channel_names = [name.upper() for name in other_ieeg_channel_names]
+                            other_scalp_channel_names = other_channels_data[other_channels_data[:,1] == "EEG"][:,0].tolist()
+                            other_scalp_channel_names = [name.upper() for name in other_scalp_channel_names]
+                            ieeg_channel_names_all_runs.append(other_ieeg_channel_names)
+                            scalp_channel_names_all_runs.append(other_scalp_channel_names)
+                        except Exception as e2:
+                            print(f"Error reading channels.tsv: {e2}\nSkipping to next .tsv file.")
+                            continue
+                    # if all entries of ieeg_channel_names_all_runs are identical, use the last entry
+                    if (len(ieeg_channel_names_all_runs) > 0 and all(name_list == ieeg_channel_names_all_runs[0] for name_list in ieeg_channel_names_all_runs)) and (len(scalp_channel_names_all_runs) > 0 and all(name_list == scalp_channel_names_all_runs[0] for name_list in scalp_channel_names_all_runs)):
+                        ieeg_channel_names = ieeg_channel_names_all_runs[0]
+                        scalp_channel_names = scalp_channel_names_all_runs[0]
+                        print(f"Using channel names from other runs for this patient as they are identical.")
+                        print(f"iEEG channels: {ieeg_channel_names}")
+                        print(f"Scalp EEG channels: {scalp_channel_names}")
+                    else:
+                        print(f"Unable to use channel names from other runs.")
+                        print(f"ieeg_channel_names_all_runs: {ieeg_channel_names_all_runs}")
+                        print(f"scalp_channel_names_all_runs: {scalp_channel_names_all_runs}")
+                        print("Skipping alpha/delta staging for this segment.")
+                        continue
                 if method == 'ad_scalp':
                     picks = scalp_channel_names
                     threshold_ratio = threshold_ratios[method]
@@ -836,11 +892,32 @@ for idx, param_dict in enumerate(bids_path_list):
                     channels_tsv_path = bids_path.copy().update(suffix="channels", extension=".tsv")
                     try:
                         channels_data = np.loadtxt(channels_tsv_path.fpath, dtype=str, delimiter="\t", skiprows=1)
+                        ieeg_channel_names = channels_data[channels_data[:,1] == "SEEG"][:,0].tolist()
+                        ieeg_channel_names = [name.upper() for name in ieeg_channel_names]
                     except Exception as e:
-                        print(f"Error reading channels.tsv from {channels_tsv_path.fpath}: {e}\nSkipping SleepSEEG staging for this segment.")
-                        continue
-                    ieeg_channel_names = channels_data[channels_data[:,1] == "SEEG"][:,0].tolist()
-                    ieeg_channel_names = [name.upper() for name in ieeg_channel_names]
+                        print(f"Error reading channels.tsv from {channels_tsv_path.fpath}: {e}")
+                        print("Attempting to load iEEG channel names from other runs for this patient...")
+                        # load channels_data from other runs for this patient
+                        ieeg_channel_names_all_runs = []
+                        # get all runs for this subject
+                        subject_bids_paths = [p for p in bids_path_list if p['subject'] == subject]
+                        for subject_bids_path in subject_bids_paths:
+                            other_channels_tsv_path = BIDSPath(root=bids_root, subject=subject_bids_path['subject'], session='ieeg01', task='all', run=subject_bids_path['run'], datatype='ieeg', suffix='channels', extension='.tsv')
+                            try:
+                                other_channels_data = np.loadtxt(other_channels_tsv_path.fpath, dtype=str, delimiter="\t", skiprows=1)
+                                other_ieeg_channel_names = other_channels_data[other_channels_data[:,1] == "SEEG"][:,0].tolist()
+                                other_ieeg_channel_names = [name.upper() for name in other_ieeg_channel_names]
+                                ieeg_channel_names_all_runs.append(other_ieeg_channel_names)
+                            except Exception as e2:
+                                print(f"Error reading channels.tsv: {e2}\nSkipping to next .tsv file.")
+                                continue
+                        # if all entries of ieeg_channel_names_all_runs are the identical, use the last entry
+                        if len(ieeg_channel_names_all_runs) > 0 and all(name_list == ieeg_channel_names_all_runs[0] for name_list in ieeg_channel_names_all_runs):
+                            ieeg_channel_names = ieeg_channel_names_all_runs[0]
+                            print(f"Using iEEG channel names from other runs for this patient as they are identical: {ieeg_channel_names}")
+                        else:
+                            print(f"Unable to use iEEG channel names from other runs: {ieeg_channel_names_all_runs}\nSkipping SleepSEEG staging for this segment.")
+                            continue
                     # create directory in data folder
                     os.makedirs(os.path.join(os.path.dirname(__file__), 'data', 'edf'), exist_ok=True)
                     segment_raw_for_edf = segment_raw.copy().pick(picks=ieeg_channel_names).resample(200, npad="auto")
@@ -882,9 +959,24 @@ for idx, param_dict in enumerate(bids_path_list):
             method_time_elapsed = this_method_timer_end - this_method_timer_start
             print(f"Predicted {predicted_stages.count('W')} wake epochs and {len(predicted_stages) - predicted_stages.count('W') - predicted_stages.count(np.nan)} sleep epochs using method {method} ({predicted_stages.count(np.nan)} epochs unable to be staged.) Processing time for this segment and method: {timedelta(seconds=method_time_elapsed)}")
             # calculate overlap coefficient between predicted_stages and manual stages
-            overall_percent_agreement, wake_sleep_percent_agreement = get_percent_agreement(run_events, predicted_stages, segment_start_sec, 30)
+            overall_percent_agreement, wake_sleep_percent_agreement, tp, tn, fp, fn, nan_prediction_count = get_percent_agreement(run_events, predicted_stages, segment_start_sec, 30)
             print(f"Overall percent agreement between predicted stages and manual stages: {overall_percent_agreement:.2f}%")
             print(f"Wake/sleep percent agreement between predicted stages and manual stages: {wake_sleep_percent_agreement:.2f}%")
+            print(f"Confusion matrix: (positive class is wake):")
+            tp_string = f"TP = {tp}"
+            fn_string = f"FN = {fn}"
+            bar_position = max(len(tp_string), len(fn_string)) + 1
+            matrix_top_row = f"{tp_string}{' ' * (bar_position - len(tp_string))}| FP = {fp}"
+            print(matrix_top_row)
+            print("-" * len(matrix_top_row))
+            matrix_bottom_row = f"{fn_string}{' ' * (bar_position - len(fn_string))}| TN = {tn}"
+            print(matrix_bottom_row)
+            print(f"Number of epochs with NaN prediction: {nan_prediction_count}")
+            print(f"Sensitivity: {tp / (tp + fn) if (tp + fn) > 0 else 0:.2f}")
+            print(f"Specificity: {tn / (tn + fp) if (tn + fp) > 0 else 0:.2f}")
+            print(f"PPV: {tp / (tp + fp) if (tp + fp) > 0 else 0:.2f}")
+            print(f"NPV: {tn / (tn + fn) if (tn + fn) > 0 else 0:.2f}")
+            print(f"F1 score: {2 * tp / (2 * tp + fp + fn) if (2 * tp + fp + fn) > 0 else 0:.2f}")
 
             # store result in dataframe
             #result_row = {'Subject': subject, 'Run': run}
@@ -894,11 +986,22 @@ for idx, param_dict in enumerate(bids_path_list):
                     results_df.loc[(results_df['Subject'] == subject) & (results_df['Run'] == run) & (results_df['Segment'] == index+1), staging_methods_to_column_names[method]['wake_sleep']] = wake_sleep_percent_agreement
                 else:
                     results_df.loc[(results_df['Subject'] == subject) & (results_df['Run'] == run) & (results_df['Segment'] == index+1), staging_methods_to_column_names[method]] = overall_percent_agreement
+                # for each column in staging_methods_to_prediction_count_column_names
+                for col in staging_methods_to_prediction_count_column_names[method]:
+                    if col[-2:] == 'TP':
+                        results_df.loc[(results_df['Subject'] == subject) & (results_df['Run'] == run) & (results_df['Segment'] == index+1), col] = tp
+                    elif col[-2:] == 'TN':
+                        results_df.loc[(results_df['Subject'] == subject) & (results_df['Run'] == run) & (results_df['Segment'] == index+1), col] = tn
+                    elif col[-2:] == 'FP':
+                        results_df.loc[(results_df['Subject'] == subject) & (results_df['Run'] == run) & (results_df['Segment'] == index+1), col] = fp
+                    elif col[-2:] == 'FN':
+                        results_df.loc[(results_df['Subject'] == subject) & (results_df['Run'] == run) & (results_df['Segment'] == index+1), col] = fn
+                    elif col[-3:] == 'NaN':
+                        results_df.loc[(results_df['Subject'] == subject) & (results_df['Run'] == run) & (results_df['Segment'] == index+1), col] = nan_prediction_count
                 # overwrite results csv with new data
                 results_df.to_csv(results_csv_path, index=False)
                 print(f"Saved updated results to {results_csv_path}.")
 
-            # TODO: saving hypnograms by segment properly
             # x values for predicted stages
             stage_x = np.arange(segment_start_sec, segment_start_sec + len(predicted_stages)*30, 30) / 3600  # assuming 30-second epochs
             y_dict_prediction = {'N3': 0, 'N2': 1, 'N1': 2, 'R': 3, 'W': 4, 'sleep': np.nan, np.nan: np.nan}
